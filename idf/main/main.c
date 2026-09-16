@@ -53,17 +53,34 @@ static void boot_escape_check(void)
     if (gpio_get_level(BOOT_GPIO) != 0) {
         return;
     }
-    ESP_LOGW(TAG, "BOOT удержан при старте — жду 3 с, потом уйду в загрузчик");
+    ESP_LOGW(TAG, "BOOT удержан при старте — жду 3 с");
     vTaskDelay(pdMS_TO_TICKS(3000));
     if (gpio_get_level(BOOT_GPIO) == 0) {
-        ESP_LOGW(TAG, "уходим в загрузчик (для перепрошивки)");
-        REG_WRITE(RTC_CNTL_OPTION1_REG, RTC_CNTL_FORCE_DOWNLOAD_BOOT);
+        /* Пока BOOT нажат, наш сброс приводит к тому, что ROM видит низкий уровень
+           на GPIO0 и уходит в режим загрузчика. RTC-бит FORCE_DOWNLOAD_BOOT
+           сознательно НЕ используем: он «липкий» — после него чип входит в загрузчик
+           на каждом сбросе, пока не снимешь питание полностью. */
+        ESP_LOGW(TAG, "перезапуск: BOOT удержан, ROM уйдёт в загрузчик");
         esp_restart();
     }
     ESP_LOGI(TAG, "BOOT отпущен — работаем дальше");
 }
 
 /* ---------------------------------------------------- обмен кадрами с lwIP (USB) */
+#if CONFIG_TINYUSB_NET_MODE_NONE
+/* Диагностическая сборка (sdkconfig.diag): USB-сети нет, логи идут в USB Serial/JTAG.
+   Нужна, чтобы понять, где именно ломается запуск, не имея UART-адаптера. */
+static esp_err_t usb_transmit(void *h, void *buffer, size_t len)
+{
+    (void)h; (void)buffer; (void)len;
+    return ESP_ERR_NOT_SUPPORTED;
+}
+
+static void usb_free_rx(void *h, void *buffer)
+{
+    free(buffer);
+}
+#else
 /* MAC, которую увидит хост: локально администрируемая (первый байт 0x02) */
 uint8_t tud_network_mac_address[6] = {0x02, 0x02, 0x84, 0x6A, 0x96, 0x00};
 
@@ -116,11 +133,24 @@ static esp_err_t usb_transmit(void *h, void *buffer, size_t len)
     tud_network_xmit(p, 0);
     return ESP_OK;
 }
+#endif /* CONFIG_TINYUSB_NET_MODE_NONE */
 
-static esp_netif_driver_ifconfig_t s_usb_drv = {
-    .handle = (void *)"usb-ncm",
-    .transmit = usb_transmit,
-    .driver_free_rx_buffer = usb_free_rx,
+/* Правильная привязка драйвера к netif — как это делает esp_eth:
+   esp_netif_new() БЕЗ driver -> esp_netif_attach(base) -> post_attach -> set_driver_config().
+   Раньше конфигурация драйвера передавалась прямо в esp_netif_new(cfg.driver): она терялась,
+   и первый же esp_netif_set_mac() (его нет в диагностической сборке) ронял приложение. */
+static esp_err_t usb_net_post_attach(esp_netif_t *netif, void *args)
+{
+    static esp_netif_driver_ifconfig_t drv = {
+        .handle = (void *)"usb-ncm",
+        .transmit = usb_transmit,
+        .driver_free_rx_buffer = usb_free_rx,
+    };
+    return esp_netif_set_driver_config(netif, &drv);
+}
+
+static esp_netif_driver_base_t s_usb_base = {
+    .post_attach = usb_net_post_attach,
 };
 
 /* -------------------------------------------------------------- веб-сервер прибора */
@@ -216,7 +246,6 @@ static void start_usb_net(void)
 
     esp_netif_config_t cfg = {
         .base = &base,
-        .driver = &s_usb_drv,
         .stack = ESP_NETIF_NETSTACK_DEFAULT_ETH,
     };
     s_netif = esp_netif_new(&cfg);
@@ -224,6 +253,8 @@ static void start_usb_net(void)
         ESP_LOGE(TAG, "не удалось создать сетевой интерфейс");
         return;
     }
+    /* привязываем наш USB-драйвер (внутри вызовется usb_net_post_attach) */
+    ESP_ERROR_CHECK(esp_netif_attach(s_netif, &s_usb_base));
     esp_netif_action_start(s_netif, NULL, 0, NULL);
     esp_netif_action_connected(s_netif, NULL, 0, NULL);
 
@@ -231,6 +262,10 @@ static void start_usb_net(void)
     esp_err_t err = esp_netif_dhcps_start(s_netif);
     ESP_LOGI(TAG, "DHCP-сервер: %s", err == ESP_OK ? "поднят" : esp_err_to_name(err));
 
+#if CONFIG_TINYUSB_NET_MODE_NONE
+    ESP_LOGW(TAG, "диагностический режим: USB-сеть выключена, логи в USB Serial/JTAG");
+    s_link_up = true;
+#else
     /* MAC берём из eFuse и делаем её локально администрируемой */
     esp_read_mac(tud_network_mac_address, ESP_MAC_WIFI_STA);
     tud_network_mac_address[0] = (uint8_t)((tud_network_mac_address[0] | 0x02) & 0xFE);
@@ -243,6 +278,7 @@ static void start_usb_net(void)
     ESP_LOGI(TAG, "USB-сеть поднята (MAC %02x:%02x:%02x:%02x:%02x:%02x), прибор на " USB_NET_IP,
              tud_network_mac_address[0], tud_network_mac_address[1], tud_network_mac_address[2],
              tud_network_mac_address[3], tud_network_mac_address[4], tud_network_mac_address[5]);
+#endif
 }
 
 void app_main(void)

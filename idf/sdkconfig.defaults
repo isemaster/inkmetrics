@@ -12,7 +12,23 @@ CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 CONFIG_TINYUSB_NET_MODE_ECM_RNDIS=y
 #CONFIG_TINYUSB_NET_MODE_NCM=y
 
+# ВАЖНО: вторичная консоль на USB-Serial/JTAG занимает тот же USB-блок, что нужен
+# TinyUSB (USB-OTG). С ней tinyusb_driver_install() возвращал ESP_ERR_TIMEOUT, и
+# прошивка падала на старте — нашли по дампу паники (main.c:276, start_usb_net).
+CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
+CONFIG_USJ_ENABLE_USB_SERIAL_JTAG=n
+
 # логи и задачи
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=4096
 CONFIG_FREERTOS_HZ=1000
+
+# Диагностика: если прошивка упадёт, дамп паники сохраняется в раздел coredump —
+# его можно прочитать через esptool и расшифровать (esp-coredump), даже когда
+# консоль недоступна (UART наружу не выведен, USB-CDC консоль запрещена с TinyUSB).
+CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
+CONFIG_ESP_COREDUMP_ENABLE_TO_UART=n
+CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF=y
+# зависание тоже должно стать паникой с дампом, а не тихой остановкой
+CONFIG_ESP_TASK_WDT_PANIC=y
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=10

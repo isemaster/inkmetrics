@@ -1,0 +1,17 @@
+# Диагностическая сборка: логи идут в аппаратный USB Serial/JTAG (тот же порт, что и
+# прошивка), USB-сеть выключена. Нужна, чтобы увидеть, на чём падает запуск, когда
+# обычная консоль недоступна (UART-адаптера у нас нет, а USB-CDC консоль
+# несовместима с TinyUSB — IDF это прямо запрещает).
+#
+#   python C:/esp/idf_build.py -C D:/inkmetrics/idf -B build-diag \
+#       -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.diag" build
+
+CONFIG_ESP_CONSOLE_UART_DEFAULT=n
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+
+CONFIG_TINYUSB_NET_MODE_ECM_RNDIS=n
+CONFIG_TINYUSB_NET_MODE_NONE=y
+
+# подробные логи на этапе запуска
+CONFIG_LOG_DEFAULT_LEVEL_DEBUG=y
+CONFIG_LOG_MAXIMUM_LEVEL_DEBUG=y
