@@ -12,12 +12,17 @@
 """
 from __future__ import annotations
 
+import hashlib
+import shutil
 import subprocess
 import sys
 import time
 from pathlib import Path
 
 from serial.tools import list_ports
+
+HERE = Path(__file__).resolve().parent
+ROOT = HERE.parent
 
 DEFAULT_IMAGES = [
     ("0x0", "bootloader/bootloader.bin"),
@@ -78,6 +83,39 @@ def reset_to_app(port: str) -> None:
                    capture_output=True, text=True)
 
 
+def archive_build(build: str) -> None:
+    """
+    Сохранить ELF и .map сборки перед заливкой: coredump и адреса паники
+    расшифровываются ТОЛЬКО по ELF именно той сборки, что была прошита.
+
+    Грабля, из-за которой это появилось: дважды подряд ELF прошитой сборки
+    перезаписывался следующей сборкой, и дамп паники становился бесполезен.
+    """
+    src = Path(build)
+    if not src.is_dir():
+        return
+    try:
+        rev = subprocess.run(["git", "-C", str(src), "rev-parse", "--short", "HEAD"],
+                             capture_output=True, text=True).stdout.strip() or "nogit"
+    except Exception:
+        rev = "nogit"
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    dest = ROOT / "firmware" / "idf-builds" / f"{stamp}-{rev}"
+    dest.mkdir(parents=True, exist_ok=True)
+    copied = []
+    for name in ("inkmetrics_idf.bin", "inkmetrics_idf.elf", "inkmetrics_idf.map", "flash_args"):
+        p = src / name
+        if p.exists():
+            shutil.copy2(p, dest / name)
+            copied.append(name)
+    (dest / "GIT_REV.txt").write_text(rev + "\n", encoding="utf-8")
+    binp = dest / "inkmetrics_idf.bin"
+    if binp.exists():
+        h = hashlib.sha256(binp.read_bytes()).hexdigest()
+        (dest / "APP_SHA256.txt").write_text(h + "\n", encoding="utf-8")
+    print(f"сборка сохранена в {dest} ({', '.join(copied)})", flush=True)
+
+
 def main() -> int:
     if len(sys.argv) < 2:
         print(__doc__)
@@ -89,6 +127,7 @@ def main() -> int:
 
     flags, images = layout(build)
     print("образы: " + ", ".join(f"{a} {f}" for a, f in images), flush=True)
+    archive_build(build)      # ELF и .map — рядом, иначе дамп паники не расшифровать
 
     for attempt in range(1, tries + 1):
         ps = ports()
