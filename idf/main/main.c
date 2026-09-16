@@ -459,6 +459,11 @@ void app_main(void)
     ESP_LOGI(TAG, "=== inkmetrics IDF %s: старт, сброс %d, чёрный ящик %s",
              FW_VERSION, (int)esp_reset_reason(), dg == ESP_OK ? "готов" : "НЕ ПОДНЯЛСЯ");
     diag_step("app_main: ящик → %s (heap %u)", esp_err_to_name(dg), (unsigned)esp_get_free_heap_size());
+
+    /* Если прошлая загрузка закончилась паникой, строк её в ящике нет (они идут через
+       ROM-консоль). Достаём причину из дампа: задача, PC, cause, обратный стек. */
+    diag_report_panic();
+
     enable_verbose_tags();
 
     /* Снимаем «липкий» RTC-бит FORCE_DOWNLOAD_BOOT, если он остался от прошлого

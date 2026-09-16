@@ -28,6 +28,9 @@
 #include <stdio.h>
 #include <string.h>
 
+#include <stdlib.h>
+
+#include "esp_core_dump.h"
 #include "esp_flash.h"
 #include "esp_log.h"
 #include "esp_system.h"
@@ -193,5 +196,99 @@ esp_err_t diag_init(const char *fw_version)
     flash_append(line, (size_t)(n > 0 ? n : 0));
 
     s_prev_vprintf = esp_log_set_vprintf(diag_vprintf);
+    diag_journal_add();          /* причина этой загрузки — в журнал (без стирания) */
     return ESP_OK;
+}
+
+/*
+ * Журнал загрузок. Лог каждой загрузки стирается, а журнал — нет: пишем только в
+ * свободные (0xFF) ячейки второго сектора раздела diag. Пока прошивка перезагружается
+ * в цикле, журнал копит последовательность причин сброса — это ответ на вопрос
+ * «почему прибор перезагружается», даже если лог не успевает записаться.
+ */
+typedef struct {
+    uint32_t magic;
+    uint32_t boots;
+    uint32_t reason;
+    uint32_t uptime_ms;
+} diag_journal_entry_t;
+
+#define DIAG_JOURNAL_MAGIC 0x4D524A44u          /* "DJRM" */
+#define DIAG_JOURNAL_SLOTS (DIAG_JOURNAL_SIZE / sizeof(diag_journal_entry_t))
+
+void diag_journal_add(void)
+{
+    for (uint32_t i = 0; i < DIAG_JOURNAL_SLOTS; i++) {
+        uint32_t addr = DIAG_JOURNAL_ADDR + i * sizeof(diag_journal_entry_t);
+        diag_journal_entry_t cur;
+        if (esp_flash_read(esp_flash_default_chip, &cur, addr, sizeof(cur)) != ESP_OK) {
+            return;
+        }
+        if (cur.magic == DIAG_JOURNAL_MAGIC) {
+            continue;                            /* ячейка занята — ищем следующую */
+        }
+        diag_journal_entry_t e = {
+            .magic = DIAG_JOURNAL_MAGIC,
+            .boots = s_boots,
+            .reason = (uint32_t)esp_reset_reason(),
+            .uptime_ms = (uint32_t)(esp_timer_get_time() / 1000),
+        };
+        esp_flash_write(esp_flash_default_chip, &e, addr, sizeof(e));
+        return;
+    }
+}
+
+/*
+ * Разбор паники прошлой загрузки. Консоли у платы нет, поэтому «Guru Meditation» с
+ * причиной исключения и снимком стека до нас не доходит. Зато IDF умеет разобрать
+ * дамп из раздела coredump и выдать сводку: задача, PC, причина исключения и
+ * обратный стек — этого достаточно, чтобы понять место падения по .map без GDB.
+ */
+esp_err_t diag_report_panic(void)
+{
+#if CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH && CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF
+    size_t addr = 0, size = 0;
+    esp_err_t err = esp_core_dump_image_get(&addr, &size);
+    if (err != ESP_OK || size == 0) {
+        diag_step("паники нет: дампа в разделе coredump не найдено (%s)", esp_err_to_name(err));
+        return err;
+    }
+    esp_core_dump_summary_t *sum = malloc(sizeof(*sum));
+    if (!sum) {
+        return ESP_ERR_NO_MEM;
+    }
+    err = esp_core_dump_get_summary(sum);
+    if (err != ESP_OK) {
+        diag_step("паника была, но сводку дампа разобрать не вышло (%s)", esp_err_to_name(err));
+        free(sum);
+        return err;
+    }
+    diag_step("ПАНИКА прошлой загрузки: задача «%s», cause %u, PC 0x%08x, vaddr 0x%08x",
+              sum->exc_task, (unsigned)sum->ex_info.exc_cause,
+              (unsigned)sum->exc_pc, (unsigned)sum->ex_info.exc_vaddr);
+    if (sum->exc_bt_info.depth > 0) {
+        char bt[224];
+        int off = snprintf(bt, sizeof(bt), "паника: стек");
+        for (uint32_t i = 0; i < sum->exc_bt_info.depth && i < 16; i++) {
+            int w = snprintf(bt + off, sizeof(bt) - (size_t)off, " 0x%08x",
+                             (unsigned)sum->exc_bt_info.bt[i]);
+            if (w <= 0 || (size_t)(off + w) >= sizeof(bt)) {
+                break;
+            }
+            off += w;
+        }
+        diag_step("%s", bt);
+    } else {
+        diag_step("паника: обратного стека нет (depth 0)");
+    }
+    if (sum->exc_bt_info.corrupted) {
+        diag_step("паника: стек помечен как повреждённый");
+    }
+    free(sum);
+    /* сводка снята — стираем дамп, иначе он будет путать следующие загрузки */
+    esp_core_dump_image_erase();
+    return ESP_OK;
+#else
+    return ESP_ERR_NOT_SUPPORTED;
+#endif
 }

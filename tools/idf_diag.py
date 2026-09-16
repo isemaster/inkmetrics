@@ -29,6 +29,47 @@ from serial.tools import list_ports
 
 PART = Path(__file__).resolve().parent.parent / "idf" / "partitions.csv"
 MAGIC = 0x31474144  # "DAG1"
+JOURNAL_MAGIC = 0x4D524A44  # "DJRM" — журнал загрузок (idf/main/diag.c)
+JOURNAL_OFF = 0x4000        # сразу за стираемой областью лога
+JOURNAL_LEN = 0x1000        # один сектор: 256 записей по 16 байт
+
+REASONS = {0: "неизвестно", 1: "power-on", 3: "software", 4: "panic", 5: "interrupt-wdt",
+           6: "task-wdt", 7: "watchdog", 8: "deep-sleep", 9: "brownout", 10: "sdio",
+           11: "usb", 12: "jtag", 13: "efuse", 15: "cpu-lockup"}
+
+
+def print_journal(data: bytes) -> None:
+    """Журнал загрузок: последовательность причин сброса, копится между загрузками.
+
+    Нужен, когда прошивка перезагружается в цикле: лог каждой загрузки стирается,
+    а здесь видно, ЧЕМ заканчиваются загрузки одна за другой (4,4,4 — паника;
+    5,5,5 — interrupt-wdt), и на какой по счёту записи цикл начался.
+    """
+    if len(data) < JOURNAL_OFF + 16:
+        print("журнал загрузок: дамп короче 0x4000 — не читался")
+        return
+    entries = []
+    for off in range(JOURNAL_OFF, min(len(data), JOURNAL_OFF + JOURNAL_LEN), 16):
+        magic, boots, reason, uptime = struct.unpack_from("<4I", data, off)
+        if magic != JOURNAL_MAGIC:
+            break
+        entries.append((boots, reason, uptime))
+    print("=" * 72)
+    if not entries:
+        print("ЖУРНАЛ ЗАГРУЗОК пуст — прошивка с журналом ещё не стартовала")
+        return
+    print(f"ЖУРНАЛ ЗАГРУЗОК: {len(entries)} записей (не стирается, копится между загрузками)")
+    for boots, reason, uptime in entries[-16:]:
+        print(f"  загрузка #{boots:<5} причина сброса {reason:<3} {REASONS.get(reason, '?'):<14}"
+              f" (ящик поднялся через {uptime} мс)")
+    counts = {}
+    for _, reason, _ in entries:
+        counts[reason] = counts.get(reason, 0) + 1
+    seq = ", ".join(f"{REASONS.get(r, r)} ×{n}" for r, n in sorted(counts.items(), key=lambda x: -x[1]))
+    print(f"  итог: {seq}")
+    if len(entries) >= 3 and len(counts) == 1:
+        print("  ВЫВОД: все загрузки кончаются одинаково — это не разовый сбой, а цикл.")
+    print("=" * 72)
 
 
 def part_info(name: str = "diag") -> tuple[int, int]:
@@ -81,7 +122,7 @@ def main() -> int:
         raw_out = sys.argv[sys.argv.index("--raw") + 1]
 
     offset, size = part_info()
-    size = min(size, 0x4000)          # прошивка пишет только первые 16 КБ раздела
+    size = min(size, 0x8000)          # 0x4000 — лог, следующие 0x1000 — журнал загрузок
 
     given = None
     if "--file" in sys.argv:                      # разобрать уже снятый дамп
@@ -134,9 +175,7 @@ def main() -> int:
     end = body.find(b"\xff")
     text = body[:end if end >= 0 else len(body)]
 
-    reasons = {0: "неизвестно", 1: "power-on", 3: "software", 4: "panic", 5: "interrupt-wdt",
-               6: "task-wdt", 7: "watchdog", 8: "deep-sleep", 9: "brownout", 10: "sdio",
-               11: "usb", 12: "jtag", 13: "efuse", 15: "cpu-lockup"}
+    reasons = REASONS
     print("=" * 72)
     print(f"загрузка #{boots}, причина сброса: {reasons.get(reason, reason)}, "
           f"лог на {len(text)} Б (область {len(data) // 1024} КБ)")
@@ -168,6 +207,8 @@ def main() -> int:
         for ln in key:
             print("  " + ln.strip())
         print("=" * 72)
+    print_journal(data)
+
     steps = [ln for ln in text_str.splitlines() if ln.startswith("STEP ")]
     print(f"меток стадий: {len(steps)}" + (f", последняя — {steps[-1][5:].strip()}" if steps else ""))
     print(f"сырой дамп: {dump}")
