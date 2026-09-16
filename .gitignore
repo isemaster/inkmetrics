@@ -37,3 +37,6 @@ host/config.json.bak
 # архив залитых сборок (bin/elf/map по 5-10 МБ) — локально, чтобы можно было
 # расшифровать coredump и адреса паники именно той сборки, что была прошита
 firmware/idf-builds/
+
+# готовый архив для переноса на другой ПК (собирается tools/make_flash_kit.py)
+flash-kit-inkmetrics-*.zip
