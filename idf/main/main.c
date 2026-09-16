@@ -7,7 +7,11 @@
  *   2. Прибор выдаёт хосту адрес по DHCP и имеет свой адрес 192.168.7.1.
  *   3. На приборе поднят HTTP-сервер: страница состояния и /api/state.
  *
- * Аварийный выход: если кнопку BOOT держать при включении (3 с), прибор уходит
+ * 4. Самопроверка (selfcheck.c): если за 5 минут хост ни разу себя не проявил
+*    (нет ответов на ping, кадров в USB-сети и HTTP-запросов), прибор сам уходит
+*    в режим загрузки — перепрошивать можно без кнопки BOOT.
+*
+* Аварийный выход: если кнопку BOOT держать при включении (3 с), прибор уходит
  * в режим загрузчика — это нужно, чтобы перепрошивать без выдёргивания USB.
  */
 #include <stdio.h>
@@ -36,6 +40,7 @@
 
 #include "diag.h"                   /* «чёрный ящик» логов (см. diag.c) */
 #include "usb_desc.h"               /* описатели USB: без них ECM/RNDIS не поднимается */
+#include "selfcheck.h"              /* самопроверка: уход в загрузчик без кнопки BOOT */
 
 #define USB_NET_IP    "192.168.7.1"
 #define USB_NET_MASK  "255.255.255.0"
@@ -106,6 +111,7 @@ static void usb_free_rx(void *h, void *buffer)
 bool tud_network_recv_cb(const uint8_t *src, uint16_t size)
 {
     s_rx_frames++;
+    selfcheck_host_frame(src, size);   /* признак жизни хоста + разбор ARP/DHCP */
     if (size == 0) {
         tud_network_recv_renew();
         return true;
@@ -174,26 +180,37 @@ static const char INDEX_HTML[] =
     "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
     "<title>inkmetrics</title><style>"
     "body{font:14px/1.5 system-ui,sans-serif;margin:0;padding:16px;background:#111;color:#eee}"
-    "h1{font-size:18px;margin:0 0 12px}table{border-collapse:collapse;width:100%;max-width:420px}"
+    "h1{font-size:18px;margin:0 0 12px}table{border-collapse:collapse;width:100%;max-width:480px}"
     "td{padding:4px 8px;border-bottom:1px solid #333}td:last-child{text-align:right;color:#7fd}"
-    "code{color:#fc6}"
+    "a{color:#fc6}"
     "</style></head><body><h1>inkmetrics — сервер в приборе</h1>"
     "<p>Страница отдана самим прибором по USB-сети. На хосте не установлено ничего:"
     " драйвер сетевой карты встроен в систему.</p>"
     "<table id=\"t\"></table>"
-    "<p>Обновляется каждые 2 с. Этот же HTTP-сервер дальше будет отдавать"
-    " страницу управления экраном, метрики ПК и настройки кнопок.</p>"
-    "<script>async function up(){const r=await fetch('/api/state');const s=await r.json();"
+    "<p><a href=\"/api/boot\">Уйти в режим загрузки сейчас</a> — то же прибор сделает сам,"
+    " если хост молчит 5 минут (перепрошивка без кнопки BOOT).</p>"
+    "<script>const NEVER=4294967295;async function up(){try{const r=await fetch('/api/state');"
+    "const s=await r.json();"
+    "const age=(s.ping_age_s===NEVER)?'ни разу':(s.ping_age_s+' с назад');"
+    "const fb=s.fallback?(s.fallback_left_s+' с'):'выключен';"
     "document.getElementById('t').innerHTML="
     "`<tr><td>Прошивка</td><td>${s.fw}</td></tr>`+"
     "`<tr><td>Аптайм</td><td>${s.up} с</td></tr>`+"
     "`<tr><td>Свободно памяти</td><td>${Math.round(s.heap/1024)} КБ</td></tr>`+"
     "`<tr><td>USB-сеть</td><td>${s.link}</td></tr>`+"
-    "`<tr><td>Адрес прибора</td><td>${s.ip}</td></tr>`;}"
+    "`<tr><td>Адрес прибора</td><td>${s.ip}</td></tr>`+"
+    "`<tr><td>Хост</td><td>${s.host}${s.host_known?' (из ARP)':''}</td></tr>`+"
+    "`<tr><td>Ответ ping</td><td>${age} (${s.ping_ok} ок / ${s.ping_fail} таймаутов)</td></tr>`+"
+    "`<tr><td>Кадры от хоста</td><td>${s.frames} (DHCP ${s.dhcp})</td></tr>`+"
+    "`<tr><td>Запросы к серверу</td><td>${s.http}</td></tr>`+"
+    "`<tr><td>Молчание хоста</td><td>${s.silence_s} с</td></tr>`+"
+    "`<tr><td>Уход в загрузчик</td><td>${fb}</td></tr>`;"
+    "}catch(e){document.getElementById('t').innerHTML='<tr><td>нет связи с прибором</td><td>'+e+'</td></tr>';}}"
     "up();setInterval(up,2000);</script></body></html>";
 
 static esp_err_t index_get(httpd_req_t *req)
 {
+    selfcheck_http_hit();
     httpd_resp_set_type(req, "text/html; charset=utf-8");
     return httpd_resp_send(req, INDEX_HTML, HTTPD_RESP_USE_STRLEN);
 }
@@ -212,17 +229,28 @@ static esp_err_t boot_get(httpd_req_t *req)
 
 static esp_err_t state_get(httpd_req_t *req)
 {
-    char json[320];
+    selfcheck_http_hit();          /* хост дотянулся до нас — это признак жизни */
+    char json[640];
     esp_netif_ip_info_t ip = {0};
     if (s_netif) {
         esp_netif_get_ip_info(s_netif, &ip);
     }
+    selfcheck_status_t sc;
+    selfcheck_status(&sc);
     int n = snprintf(json, sizeof(json),
-                     "{\"fw\":\"%s\",\"up\":%lld,\"heap\":%u,\"link\":\"%s\",\"ip\":\"" IPSTR "\"}",
+                     "{\"fw\":\"%s\",\"up\":%lld,\"heap\":%u,\"link\":\"%s\",\"ip\":\"" IPSTR "\","
+                     "\"host\":\"%s\",\"host_known\":%u,\"silence_s\":%u,\"fallback_left_s\":%u,"
+                     "\"ping_ok\":%u,\"ping_fail\":%u,\"ping_age_s\":%u,\"http\":%u,"
+                     "\"frames\":%u,\"dhcp\":%u,\"http_up\":%u,\"fallback\":%u}",
                      FW_VERSION, esp_timer_get_time() / 1000000,
                      (unsigned)esp_get_free_heap_size(),
                      s_link_up ? "поднята" : "нет",
-                     IP2STR(&ip.ip));
+                     IP2STR(&ip.ip),
+                     sc.host, (unsigned)sc.host_known, (unsigned)sc.silence_s,
+                     (unsigned)sc.fallback_left_s, (unsigned)sc.ping_ok, (unsigned)sc.ping_fail,
+                     (unsigned)sc.ping_age_s, (unsigned)sc.http_hits, (unsigned)sc.host_frames,
+                     (unsigned)sc.dhcp_frames, sc.http_up ? 1u : 0u,
+                     (unsigned)(SELFCHECK_ENABLED ? 1 : 0));
     httpd_resp_set_type(req, "application/json");
     return httpd_resp_send(req, json, n);
 }
@@ -240,6 +268,7 @@ static void start_http(void)
     ESP_ERROR_CHECK(httpd_register_uri_handler(server, &uri_index));
     ESP_ERROR_CHECK(httpd_register_uri_handler(server, &uri_state));
     ESP_ERROR_CHECK(httpd_register_uri_handler(server, &uri_boot));
+    selfcheck_http_up(true);
     ESP_LOGI(TAG, "HTTP-сервер поднят: http://" USB_NET_IP "/");
 }
 
@@ -302,12 +331,14 @@ static void usb_event_cb(tinyusb_event_t *event, void *arg)
             esp_netif_action_connected(s_netif, NULL, 0, NULL);
         }
         s_link_up = true;
+        selfcheck_set_link(true);
     } else if (event->id == TINYUSB_EVENT_DETACHED) {
         name = "хост отключился";
         if (s_netif) {
             esp_netif_action_disconnected(s_netif, NULL, 0, NULL);
         }
         s_link_up = false;
+        selfcheck_set_link(false);
     }
     ESP_LOGI(TAG, "USB-событие: %s", name);
     diag_step("USB-событие: %s (порт %u)", name, (unsigned)event->rhport);
@@ -430,6 +461,13 @@ void app_main(void)
     diag_step("app_main: ящик → %s (heap %u)", esp_err_to_name(dg), (unsigned)esp_get_free_heap_size());
     enable_verbose_tags();
 
+    /* Снимаем «липкий» RTC-бит FORCE_DOWNLOAD_BOOT, если он остался от прошлого
+       цикла (/api/boot или автоматического ухода в загрузчик): пока приложение
+       работает, бит не нужен, а забытый бит отправит чип в загрузчик при
+       следующем сбросе. */
+    REG_WRITE(RTC_CNTL_OPTION1_REG, 0);
+    selfcheck_init();
+
     boot_escape_check();
     diag_step("boot_escape_check пройден (BOOT не удержан)");
 
@@ -452,6 +490,7 @@ void app_main(void)
     start_usb_net();
     diag_step("start_usb_net вернулся (link %s)", s_link_up ? "есть" : "нет");
     start_http();
+    selfcheck_start(s_netif);   /* следим за хостом и уходим в загрузчик, если он молчит */
 
     ESP_LOGI(TAG, "готово: подключи кабель и открой http://" USB_NET_IP "/");
     diag_step("идём в главный цикл");

@@ -2,7 +2,8 @@
 rem Flash inkmetrics (ESP-IDF build, USB network) to ESP32-S3-ePaper-1.54. Four images.
 rem Usage: flash.bat COM5
 rem Put the board into bootloader first: hold BOOT, plug USB, keep 2 s, release.
-rem Note: this build currently reboots every ~20 s on hardware; flash for debugging only.
+rem Note: debug build. Self-check: if the host stays silent for 5 minutes the board
+rem enters bootloader by itself (idf/main/selfcheck.c), so BOOT is not needed to re-flash.
 rem ASCII only on purpose: cmd.exe renders Russian text from a UTF-8 .bat as garbage.
 setlocal
 if "%~1"=="" (
@@ -37,6 +38,11 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
+rem Clear the sticky RTC force-download bit, then reset into the app. The bit is set by
+rem /api/boot or by the automatic fallback; while it is set the ROM re-enters download
+rem mode on every reset and the app would not start until USB is re-plugged.
+%PY% -m esptool --chip esp32s3 --port %~1 --before no-reset --after watchdog-reset ^
+  write-mem 0x6000812C 0x00
 echo.
 echo DONE. Windows should show a network adapter "Remote NDIS based Internet Sharing Device".
 pause

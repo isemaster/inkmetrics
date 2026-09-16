@@ -51,6 +51,33 @@ def ports() -> list[str]:
     return [p.device for p in list_ports.comports() if "303A" in (p.hwid or "").upper()]
 
 
+# RTC_CNTL_OPTION1_REG: DR_REG_RTCCNTL_BASE (0x60008000) + 0x12C, бит 0 = FORCE_DOWNLOAD_BOOT
+RTC_CNTL_OPTION1_REG = 0x6000812C
+
+
+def reset_to_app(port: str) -> None:
+    """
+    Снять «липкий» RTC-бит FORCE_DOWNLOAD_BOOT и сбросить чип в приложение.
+
+    Бит ставит либо GET /api/boot, либо автоматический уход в загрузчик (idf/main/selfcheck.c).
+    Пока бит установлен, ROM уходит в загрузчик при КАЖДОМ сбросе — то есть после записи
+    плата снова оказалась бы в загрузчике, пока не передёрнешь USB. Пишем 0 прямо в
+    регистр через загрузчик и сбрасываем чип.
+    """
+    cmd = [sys.executable, "-m", "esptool", "--chip", "esp32s3", "--port", port,
+           "--before", "no-reset", "--after", "watchdog-reset",
+           "write-mem", hex(RTC_CNTL_OPTION1_REG), "0x00"]
+    res = subprocess.run(cmd, capture_output=True, text=True)
+    out = ((res.stdout or "") + (res.stderr or "")).strip()
+    if res.returncode == 0:
+        print("RTC-бит загрузчика снят, чип сброшен в приложение", flush=True)
+        return
+    print("снять RTC-бит не вышло (" + out.splitlines()[-1] + "), просто сбрасываю чип", flush=True)
+    subprocess.run([sys.executable, "-m", "esptool", "--chip", "esp32s3", "--port", port,
+                    "--before", "no-reset", "--after", "watchdog-reset", "chip-id"],
+                   capture_output=True, text=True)
+
+
 def main() -> int:
     if len(sys.argv) < 2:
         print(__doc__)
@@ -71,8 +98,10 @@ def main() -> int:
             continue
         port = ps[0]
         print(f"[{attempt}] порт {port}, прошиваю", flush=True)
+        # --after no-reset: чип остаётся в загрузчике, чтобы следующим шагом снять
+        # RTC-бит (иначе он снова уйдёт в загрузчик и приложение не запустится)
         cmd = [sys.executable, "-m", "esptool", "--chip", "esp32s3", "--port", port,
-               "--before", "default-reset", "--after", "watchdog-reset",
+               "--before", "default-reset", "--after", "no-reset",
                "--baud", "921600", "write-flash"] + flags + ["-z"]
         for addr, rel in images:
             cmd += [addr, f"{build}/{rel}"]
@@ -80,6 +109,7 @@ def main() -> int:
         out = (res.stdout or "") + (res.stderr or "")
         if res.returncode == 0 and "Hash of data verified" in out:
             print("ПРОШИТО УСПЕШНО", flush=True)
+            reset_to_app(port)
             return 0
         lines = [l.strip() for l in out.strip().splitlines() if l.strip()]
         print("   не вышло: " + " | ".join(lines[-2:]), flush=True)
