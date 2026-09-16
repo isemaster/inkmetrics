@@ -15,9 +15,12 @@
 | Адрес прибора | `192.168.7.1` (страница `http://192.168.7.1/`, состояние `/api/state`) |
 | Адрес хоста | выдаёт DHCP самого прибора (обычно `192.168.7.2`) |
 | Режим USB-сети | **ECM/RNDIS** (NCM Windows не приняла: `CM_PROB_FAILED_INSTALL`) |
-| Сборка | `python C:/esp/idf_build.py -C D:/inkmetrics/idf build` |
-| Прошивка | `bash tools/flash_idf.sh` |
-| Уйти в загрузчик | `http://192.168.7.1/api/boot` либо зажать `BOOT` при включении на 3 с |
+| Сборка | `python C:/esp/idf_build.py -C D:/inkmetrics/idf -B D:/inkmetrics/idf/build build` |
+| Прошивка | `python tools/try_flash.py D:/inkmetrics/idf/build` (сам ждёт порт ROM, раскладку берёт из `flash_args`) |
+| Прошивка с другого ПК | `flash-kit/idf/flash-merged.bat COMx` — образы и инструкция в `flash-kit/README.md` |
+| Логи прошивки | консоли нет; логи идут в «чёрный ящик» (раздел `diag`) — читать `python tools/idf_diag.py` |
+| Уйти в загрузчик | зажать `BOOT` при подключении USB, держать ~3 с. `http://192.168.7.1/api/boot` пока не годится: адрес по DHCP хост не получает |
+| Что осталось и что сломано | `ISSUES.md` (все замечания), `idf/README.md` (порядок работы и грабли) |
 
 Особенности окружения (Windows + git-bash):
 
@@ -28,7 +31,8 @@
   отдают нам 0 байт): `python tools/idf_get_tools.py`, установка из локального
   `C:/esp/dist/tools_local.json`.
 - Раскладка разделов своя (`idf/partitions.csv`): `app0`/`app1` под OTA, диск хоста
-  (`msc`, 1,5 МБ) на том же смещении, что в Arduino-версии — файлы не теряются.
+  (`msc`, 1,44 МБ) на том же смещении, что в Arduino-версии — файлы не теряются;
+  рядом `diag` (логи прошивки) и `coredump`.
 
 ## Быстрый старт
 
