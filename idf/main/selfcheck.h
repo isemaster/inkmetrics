@@ -32,6 +32,9 @@
 /* маркер «данных ещё не было» */
 #define SELFCHECK_NEVER            0xFFFFFFFFu
 
+/* история задержек (для графика на экране): 60 замеров по 3 с — три минуты */
+#define SELFCHECK_RTT_HISTORY      60
+
 typedef struct {
     bool     enabled;          /* самопроверка включена */
     bool     link;             /* хост подключён по USB (событие стека) */
@@ -54,7 +57,21 @@ void selfcheck_http_up(bool up);
 void selfcheck_set_link(bool up);
 void selfcheck_http_hit(void);                     /* вызывать из обработчиков HTTP */
 void selfcheck_host_frame(const uint8_t *frame, uint16_t len);  /* вызывать из приёма USB-кадров */
+typedef struct {
+    uint32_t last_ms;      /* последний ответ */
+    uint32_t min_ms;
+    uint32_t avg_ms;
+    uint32_t max_ms;
+    uint32_t loss_pct;     /* потери, % */
+} selfcheck_ping_stat_t;
+
 void selfcheck_status(selfcheck_status_t *out);
+/* Задержки ping: last/min/avg/max и потери (для экрана и веб-страницы). */
+void selfcheck_ping_stats(selfcheck_ping_stat_t *out);
+/* История последних замеров, старые → новые. Возвращает число записей. */
+int  selfcheck_rtt_history(uint16_t *dst, int max);
+/* Имя хоста из DHCP-опции 12 (как хост себя называет); "" — ещё не видели. */
+const char *selfcheck_host_name(void);
 void selfcheck_enter_download_mode(const char *why);
 
 #endif /* SELFCHECK_H */

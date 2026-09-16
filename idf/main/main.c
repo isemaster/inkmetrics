@@ -42,6 +42,8 @@
 #include "usb_desc.h"               /* описатели USB: без них ECM/RNDIS не поднимается */
 #include "selfcheck.h"              /* самопроверка: уход в загрузчик без кнопки BOOT */
 #include "ui.h"                     /* экран прибора: панель, кнопки, SHTC3 (см. ui.c) */
+#include "timesync.h"               /* время с хоста: SNTP + подсказка от браузера */
+#include "probe.h"                  /* проверка сервисов хоста по сети */
 
 #define USB_NET_IP    "192.168.7.1"
 #define USB_NET_MASK  "255.255.255.0"
@@ -86,6 +88,9 @@ static void boot_escape_check(void)
    (сеть поднялась, а адрес по DHCP хост не получил — это первое, что нужно знать). */
 static volatile uint32_t s_rx_frames;
 static volatile uint32_t s_tx_frames;
+static volatile uint32_t s_rx_bytes;
+static volatile uint32_t s_tx_bytes;
+static volatile uint32_t s_reconnects;   /* сколько раз хост отключался */
 
 #if CONFIG_TINYUSB_NET_MODE_NONE
 /* Диагностическая сборка (sdkconfig.diag): USB-сети нет, логи идут в USB Serial/JTAG.
@@ -113,6 +118,7 @@ static void usb_free_rx(void *h, void *buffer)
 bool tud_network_recv_cb(const uint8_t *src, uint16_t size)
 {
     s_rx_frames++;
+    s_rx_bytes += size;
     selfcheck_host_frame(src, size);   /* признак жизни хоста + разбор ARP/DHCP */
     if (size == 0) {
         tud_network_recv_renew();
@@ -167,6 +173,7 @@ static esp_err_t usb_transmit(void *h, void *buffer, size_t len)
     }
     tud_network_xmit(buffer, (uint16_t)len);   /* ref = кадр, arg = длина */
     s_tx_frames++;
+    s_tx_bytes += len;
     return ESP_OK;
 }
 #endif /* CONFIG_TINYUSB_NET_MODE_NONE */
@@ -195,7 +202,7 @@ static const char INDEX_HTML[] =
     "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
     "<title>inkmetrics</title><style>"
     "body{font:14px/1.5 system-ui,sans-serif;margin:0;padding:16px;background:#111;color:#eee}"
-    "h1{font-size:18px;margin:0 0 12px}table{border-collapse:collapse;width:100%;max-width:480px}"
+    "h1{font-size:18px;margin:0 0 12px}table{border-collapse:collapse;width:100%;max-width:520px}"
     "td{padding:4px 8px;border-bottom:1px solid #333}td:last-child{text-align:right;color:#7fd}"
     "a{color:#fc6}"
     "</style></head><body><h1>inkmetrics — сервер в приборе</h1>"
@@ -204,24 +211,36 @@ static const char INDEX_HTML[] =
     "<table id=\"t\"></table>"
     "<p><a href=\"/api/boot\">Уйти в режим загрузки сейчас</a> — то же прибор сделает сам,"
     " если хост молчит 5 минут (перепрошивка без кнопки BOOT).</p>"
-    "<script>const NEVER=4294967295;async function up(){try{const r=await fetch('/api/state');"
-    "const s=await r.json();"
+    "<script>const NEVER=4294967295;"
+    "function hostTime(){const d=new Date();"
+    "fetch('/api/host-time?unix='+Math.floor(d.getTime()/1000)+'&tz='+(-d.getTimezoneOffset()))"
+    ".catch(()=>{});}"
+    "async function up(){try{const r=await fetch('/api/state');const s=await r.json();"
     "const age=(s.ping_age_s===NEVER)?'ни разу':(s.ping_age_s+' с назад');"
     "const fb=s.fallback?(s.fallback_left_s+' с'):'выключен';"
+    "const host=s.host_name?(s.host_name+' ('+s.host+')'):s.host;"
+    "const tm=s.time_valid?(s.time+' '+s.tsrc):'нет (нужен NTP на хосте или открытая страница)';"
     "document.getElementById('t').innerHTML="
     "`<tr><td>Прошивка</td><td>${s.fw}</td></tr>`+"
     "`<tr><td>Аптайм</td><td>${s.up} с</td></tr>`+"
     "`<tr><td>Свободно памяти</td><td>${Math.round(s.heap/1024)} КБ</td></tr>`+"
     "`<tr><td>USB-сеть</td><td>${s.link}</td></tr>`+"
     "`<tr><td>Адрес прибора</td><td>${s.ip}</td></tr>`+"
-    "`<tr><td>Хост</td><td>${s.host}${s.host_known?' (из ARP)':''}</td></tr>`+"
+    "`<tr><td>Хост</td><td>${host}</td></tr>`+"
+    "`<tr><td>Время хоста</td><td>${tm}</td></tr>`+"
     "`<tr><td>Ответ ping</td><td>${age} (${s.ping_ok} ок / ${s.ping_fail} таймаутов)</td></tr>`+"
+    "`<tr><td>Задержка</td><td>${s.rtt_last} мс (min ${s.rtt_min} / avg ${s.rtt_avg} / max ${s.rtt_max}), потери ${s.loss}%</td></tr>`+"
+    "`<tr><td>Канал</td><td>RX ${s.rx_rate}/с ${s.rx_kbs} КБ/с · TX ${s.tx_rate}/с ${s.tx_kbs} КБ/с</td></tr>`+"
+    "`<tr><td>Разрывы USB</td><td>${s.reconnects}</td></tr>`+"
     "`<tr><td>Кадры от хоста</td><td>${s.frames} (DHCP ${s.dhcp})</td></tr>`+"
     "`<tr><td>Запросы к серверу</td><td>${s.http}</td></tr>`+"
+    "`<tr><td>Сервисы хоста</td><td>${s.svc}</td></tr>`+"
+    "`<tr><td>Веб-сервер хоста</td><td>${s.http_ok?(s.http_code+' за '+s.http_ms+' мс'):'нет ответа'}</td></tr>`+"
     "`<tr><td>Молчание хоста</td><td>${s.silence_s} с</td></tr>`+"
     "`<tr><td>Уход в загрузчик</td><td>${fb}</td></tr>`;"
-    "}catch(e){document.getElementById('t').innerHTML='<tr><td>нет связи с прибором</td><td>'+e+'</td></tr>';}}"
-    "up();setInterval(up,2000);</script></body></html>";
+    "}catch(e){document.getElementById('t').innerHTML="
+    "'<tr><td>нет связи с прибором</td><td>'+e+'</td></tr>';}}"
+    "hostTime();up();setInterval(up,2000);setInterval(hostTime,60000);</script></body></html>";
 
 static esp_err_t index_get(httpd_req_t *req)
 {
@@ -245,29 +264,79 @@ static esp_err_t boot_get(httpd_req_t *req)
 static esp_err_t state_get(httpd_req_t *req)
 {
     selfcheck_http_hit();          /* хост дотянулся до нас — это признак жизни */
-    char json[640];
+    char json[1024];
+    char svc[128] = "";
     esp_netif_ip_info_t ip = {0};
     if (s_netif) {
         esp_netif_get_ip_info(s_netif, &ip);
     }
     selfcheck_status_t sc;
     selfcheck_status(&sc);
+    selfcheck_ping_stat_t ps;
+    selfcheck_ping_stats(&ps);
+    probe_state_t pr;
+    probe_get(&pr);
+    for (int i = 0; i < 6; i++) {
+        char one[24];
+        snprintf(one, sizeof(one), "%s%s", i ? " " : "", pr.svc[i].name ? pr.svc[i].name : "?");
+        strlcat(svc, one, sizeof(svc));
+        strlcat(svc, pr.svc[i].open ? ":ok" : ":-", sizeof(svc));
+    }
+    char tstr[16], dstr[16], tsrc[8];
+    timesync_time_str(tstr, sizeof(tstr));
+    timesync_date_str(dstr, sizeof(dstr));
+    bool time_ok = timesync_source(tsrc, sizeof(tsrc));
+
     int n = snprintf(json, sizeof(json),
                      "{\"fw\":\"%s\",\"up\":%lld,\"heap\":%u,\"link\":\"%s\",\"ip\":\"" IPSTR "\","
-                     "\"host\":\"%s\",\"host_known\":%u,\"silence_s\":%u,\"fallback_left_s\":%u,"
-                     "\"ping_ok\":%u,\"ping_fail\":%u,\"ping_age_s\":%u,\"http\":%u,"
-                     "\"frames\":%u,\"dhcp\":%u,\"http_up\":%u,\"fallback\":%u}",
+                     "\"host\":\"%s\",\"host_name\":\"%s\",\"host_known\":%u,"
+                     "\"time\":\"%s\",\"date\":\"%s\",\"tsrc\":\"%s\",\"time_valid\":%u,"
+                     "\"silence_s\":%u,\"fallback_left_s\":%u,"
+                     "\"ping_ok\":%u,\"ping_fail\":%u,\"ping_age_s\":%u,"
+                     "\"rtt_last\":%u,\"rtt_min\":%u,\"rtt_avg\":%u,\"rtt_max\":%u,\"loss\":%u,"
+                     "\"rx_rate\":%u,\"tx_rate\":%u,\"rx_kbs\":%u,\"tx_kbs\":%u,\"reconnects\":%u,"
+                     "\"http\":%u,\"frames\":%u,\"dhcp\":%u,\"http_up\":%u,\"fallback\":%u,"
+                     "\"svc\":\"%s\",\"http_ok\":%u,\"http_code\":%d,\"http_ms\":%u}",
                      FW_VERSION, esp_timer_get_time() / 1000000,
                      (unsigned)esp_get_free_heap_size(),
                      s_link_up ? "поднята" : "нет",
                      IP2STR(&ip.ip),
-                     sc.host, (unsigned)sc.host_known, (unsigned)sc.silence_s,
-                     (unsigned)sc.fallback_left_s, (unsigned)sc.ping_ok, (unsigned)sc.ping_fail,
-                     (unsigned)sc.ping_age_s, (unsigned)sc.http_hits, (unsigned)sc.host_frames,
-                     (unsigned)sc.dhcp_frames, sc.http_up ? 1u : 0u,
-                     (unsigned)(SELFCHECK_ENABLED ? 1 : 0));
+                     sc.host, selfcheck_host_name(), (unsigned)sc.host_known,
+                     tstr, dstr, tsrc, (unsigned)(time_ok ? 1 : 0),
+                     (unsigned)sc.silence_s, (unsigned)sc.fallback_left_s,
+                     (unsigned)sc.ping_ok, (unsigned)sc.ping_fail, (unsigned)sc.ping_age_s,
+                     (unsigned)ps.last_ms, (unsigned)ps.min_ms, (unsigned)ps.avg_ms,
+                     (unsigned)ps.max_ms, (unsigned)ps.loss_pct,
+                     (unsigned)(s_rx_frames), (unsigned)(s_tx_frames),
+                     (unsigned)(s_rx_bytes / 1024), (unsigned)(s_tx_bytes / 1024),
+                     (unsigned)s_reconnects,
+                     (unsigned)sc.http_hits, (unsigned)sc.host_frames, (unsigned)sc.dhcp_frames,
+                     sc.http_up ? 1u : 0u, (unsigned)(SELFCHECK_ENABLED ? 1 : 0),
+                     svc, pr.http_ok ? 1u : 0u, pr.http_code, (unsigned)pr.http_ms);
     httpd_resp_set_type(req, "application/json");
     return httpd_resp_send(req, json, n);
+}
+
+/* Подсказка времени от браузера хоста: страница открыта на хосте — берём его часы.
+   Нужна потому, что на стоковой Windows служба w32time не отдаёт NTP (проверено
+   16.09: UDP 123 не отвечает), а время на экране нужно. */
+static esp_err_t hosttime_get(httpd_req_t *req)
+{
+    selfcheck_http_hit();
+    char q[96];
+    uint64_t unix_s = 0;
+    int tz_min = 180;
+    if (httpd_req_get_url_query_str(req, q, sizeof(q)) == ESP_OK) {
+        char val[24];
+        if (httpd_query_key_value(q, "unix", val, sizeof(val)) == ESP_OK) {
+            unix_s = strtoull(val, NULL, 10);
+        }
+        if (httpd_query_key_value(q, "tz", val, sizeof(val)) == ESP_OK) {
+            tz_min = atoi(val);
+        }
+    }
+    timesync_set_from_host(unix_s, tz_min);
+    return httpd_resp_send(req, "ok\n", HTTPD_RESP_USE_STRLEN);
 }
 
 static void start_http(void)
@@ -280,9 +349,11 @@ static void start_http(void)
     httpd_uri_t uri_index = { .uri = "/", .method = HTTP_GET, .handler = index_get };
     httpd_uri_t uri_state = { .uri = "/api/state", .method = HTTP_GET, .handler = state_get };
     httpd_uri_t uri_boot  = { .uri = "/api/boot", .method = HTTP_GET, .handler = boot_get };
+    httpd_uri_t uri_time  = { .uri = "/api/host-time", .method = HTTP_GET, .handler = hosttime_get };
     ESP_ERROR_CHECK(httpd_register_uri_handler(server, &uri_index));
     ESP_ERROR_CHECK(httpd_register_uri_handler(server, &uri_state));
     ESP_ERROR_CHECK(httpd_register_uri_handler(server, &uri_boot));
+    ESP_ERROR_CHECK(httpd_register_uri_handler(server, &uri_time));
     selfcheck_http_up(true);
     ESP_LOGI(TAG, "HTTP-сервер поднят: http://" USB_NET_IP "/");
 }
@@ -353,6 +424,7 @@ static void usb_event_cb(tinyusb_event_t *event, void *arg)
             esp_netif_action_disconnected(s_netif, NULL, 0, NULL);
         }
         s_link_up = false;
+        s_reconnects++;
         selfcheck_set_link(false);
     }
     ESP_LOGI(TAG, "USB-событие: %s", name);
@@ -523,7 +595,8 @@ void app_main(void)
         tick++;
         ESP_LOGI(TAG, "работаю: heap %u, up %lld с", (unsigned)esp_get_free_heap_size(),
                  esp_timer_get_time() / 1000000);
-        ui_set_net_info(s_link_up, s_rx_frames, s_tx_frames);   /* экран видит состояние сети */
+        ui_set_net_info(s_link_up, s_rx_frames, s_tx_frames,
+                        s_rx_bytes, s_tx_bytes, s_reconnects);   /* экран видит состояние сети */
         if (tick % 2 == 0) {           /* раз в 10 с — строка в «чёрный ящик» */
             esp_netif_ip_info_t ip = {0};
             if (s_netif) {

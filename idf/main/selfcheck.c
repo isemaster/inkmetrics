@@ -33,6 +33,11 @@ static volatile uint64_t s_last_reply_us;  /* ответ на ping; 0 = не б�
 static volatile uint32_t s_ping_ok, s_ping_fail;
 static volatile uint32_t s_host_ip;        /* сетевой порядок; 0 = неизвестен */
 static char              s_ping_target[16] = "";
+static char              s_host_name[32];         /* имя хоста из DHCP-опции 12 */
+/* задержки ping: сводка и кольцевая история для графика на экране */
+static volatile uint32_t s_rtt_last, s_rtt_min, s_rtt_max, s_rtt_sum, s_rtt_cnt;
+static volatile uint16_t s_rtt_hist[SELFCHECK_RTT_HISTORY];
+static volatile uint32_t s_rtt_head;
 
 static uint64_t now_us(void)
 {
@@ -54,10 +59,28 @@ static uint32_t age_s(uint64_t t)
    не единственный признак: любой кадр от хоста и HTTP-запрос считаются тоже. */
 static void ping_ok_cb(esp_ping_handle_t hdl, void *args)
 {
-    (void)hdl; (void)args;
+    (void)args;
+    uint32_t ms = 0;
+    /* ESP_PING_PROF_TIMEGAP — время между запросом и ответом в миллисекундах */
+    if (esp_ping_get_profile(hdl, ESP_PING_PROF_TIMEGAP, &ms, sizeof(ms)) != ESP_OK) {
+        ms = 0;
+    }
     s_ping_ok++;
     s_last_reply_us = now_us();
     s_last_host_us = now_us();
+    s_rtt_last = ms;
+    if (ms) {
+        if (s_rtt_min == 0 || ms < s_rtt_min) {
+            s_rtt_min = ms;
+        }
+        if (ms > s_rtt_max) {
+            s_rtt_max = ms;
+        }
+        s_rtt_sum += ms;
+        s_rtt_cnt++;
+        s_rtt_hist[s_rtt_head % SELFCHECK_RTT_HISTORY] = (uint16_t)ms;
+        s_rtt_head++;
+    }
 }
 
 static void ping_timeout_cb(esp_ping_handle_t hdl, void *args)
@@ -144,12 +167,72 @@ void selfcheck_host_frame(const uint8_t *frame, uint16_t len)
             uint16_t dp = (uint16_t)((udp[2] << 8) | udp[3]);
             if (sp == 68 && dp == 67) {             /* хост спрашивает адрес у нас */
                 s_dhcp_frames++;
+                /* Разбираем опции DHCP: опция 12 — имя, которое хост сообщает о себе
+                   (Windows и Linux шлют его в DISCOVER/REQUEST). Это единственное, что
+                   хост рассказывает о себе сам, без установки чего-либо на нём. */
+                const uint8_t *dhcp = udp + 8;
+                uint16_t dhcp_len = (uint16_t)(len - (14 + ihl + 8));
+                if (dhcp_len > 240) {
+                    const uint8_t *opt = dhcp + 240;
+                    const uint8_t *end = dhcp + dhcp_len;
+                    while (opt + 1 < end && *opt != 255) {
+                        uint8_t code = opt[0];
+                        if (code == 0) {            /* padding */
+                            opt++;
+                            continue;
+                        }
+                        uint8_t olen = opt[1];
+                        if (opt + 2 + olen > end) {
+                            break;
+                        }
+                        if (code == 12 && olen > 0 && olen < sizeof(s_host_name)) {
+                            memcpy(s_host_name, opt + 2, olen);
+                            s_host_name[olen] = 0;
+                            diag_step("самопроверка: хост назвался «%s» (DHCP опция 12)", s_host_name);
+                        }
+                        opt += 2 + olen;
+                    }
+                }
             }
         }
     }
 }
 
 /* --------------------------------------------------------- уход в режим загрузки */
+void selfcheck_ping_stats(selfcheck_ping_stat_t *out)
+{
+    if (!out) {
+        return;
+    }
+    out->last_ms = s_rtt_last;
+    out->min_ms = s_rtt_min;
+    out->max_ms = s_rtt_max;
+    out->avg_ms = s_rtt_cnt ? (s_rtt_sum / s_rtt_cnt) : 0;
+    uint32_t total = s_ping_ok + s_ping_fail;
+    out->loss_pct = total ? (uint32_t)((s_ping_fail * 100u) / total) : 0;
+}
+
+int selfcheck_rtt_history(uint16_t *dst, int max)
+{
+    if (!dst || max <= 0) {
+        return 0;
+    }
+    uint32_t have = s_rtt_head < SELFCHECK_RTT_HISTORY ? s_rtt_head : SELFCHECK_RTT_HISTORY;
+    if ((uint32_t)max < have) {
+        have = (uint32_t)max;
+    }
+    for (uint32_t i = 0; i < have; i++) {            /* от старых к новым */
+        uint32_t idx = (s_rtt_head - have + i) % SELFCHECK_RTT_HISTORY;
+        dst[i] = s_rtt_hist[idx];
+    }
+    return (int)have;
+}
+
+const char *selfcheck_host_name(void)
+{
+    return s_host_name;
+}
+
 void selfcheck_enter_download_mode(const char *why)
 {
     ESP_LOGW(TAG, "ухожу в режим загрузки: %s", why);
@@ -289,6 +372,24 @@ void selfcheck_status(selfcheck_status_t *out)
     if (out) {
         memset(out, 0, sizeof(*out));
     }
+}
+
+void selfcheck_ping_stats(selfcheck_ping_stat_t *out)
+{
+    if (out) {
+        memset(out, 0, sizeof(*out));
+    }
+}
+
+int selfcheck_rtt_history(uint16_t *dst, int max)
+{
+    (void)dst; (void)max;
+    return 0;
+}
+
+const char *selfcheck_host_name(void)
+{
+    return "";
 }
 
 #endif /* SELFCHECK_ENABLED */
