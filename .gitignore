@@ -5,10 +5,14 @@ __pycache__/
 
 # IDF-проект: артефакты сборки и скачанные компоненты не держим в git
 idf/build/
+idf/build-diag/
 idf/managed_components/
 idf/sdkconfig
 idf/sdkconfig.old
 idf/dependencies.lock
+
+# каталог сборки IDF, если запускать из корня проекта (idf.py -B build-diag)
+build-diag/
 
 # инструменты: локальные бинарники (54 МБ), не в git
 tools/*.exe
