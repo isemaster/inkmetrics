@@ -96,11 +96,12 @@ static void show_device(const screen_state_t *st)
 
     if (st->time_valid) {
         line(44, "TIME %s", st->time_str);
-        line(66, "DATE %s", st->date_str);
     } else {
         line(44, "TIME WAITING");
-        line(66, "DATE --");
     }
+    /* шлюз на этой же странице: если адрес и шлюз совпали — сеть настроена неверно,
+       и это видно сразу (без похода в веб-кабинет) */
+    line(66, "GW %s", st->gateway ? st->gateway : "-");
 
     if (st->sensor_ok) {
         line(88, "TEMP %.1fC RH %.0f%%", (double)st->t_c, (double)st->rh);

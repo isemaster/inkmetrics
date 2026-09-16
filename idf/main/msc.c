@@ -138,8 +138,14 @@ bool tud_msc_is_writable_cb(uint8_t lun)
 int32_t tud_msc_read10_cb(uint8_t lun, uint32_t lba, uint32_t offset, void *buffer, uint32_t bufsize)
 {
     (void)lun;
+    static bool logged;
     if (!s_part || lba >= MSC_SECTORS) {
         return -1;
+    }
+    if (!logged) {
+        logged = true;
+        ESP_LOGI(TAG, "хост читает диск: первая команда READ10, сектор %u", (unsigned)lba);
+        diag_step("диск: хост читает диск (READ10, сектор %u) — MSC работает", (unsigned)lba);
     }
     esp_err_t err = esp_partition_read(s_part, (size_t)lba * MSC_SECTOR + offset, buffer, bufsize);
     if (err != ESP_OK) {
@@ -158,6 +164,12 @@ int32_t tud_msc_write10_cb(uint8_t lun, uint32_t lba, uint32_t offset, uint8_t *
     }
     if (settings_get()->disk_write_lock) {
         return -1;                     /* блокировка записи: настройка прибора */
+    }
+    static bool logged;
+    if (!logged) {
+        logged = true;
+        ESP_LOGI(TAG, "хост пишет на диск: первая команда WRITE10, сектор %u", (unsigned)lba);
+        diag_step("диск: хост пишет на диск (WRITE10, сектор %u)", (unsigned)lba);
     }
     esp_err_t err = esp_partition_write(s_part, (size_t)lba * MSC_SECTOR + offset, buffer, bufsize);
     if (err != ESP_OK) {

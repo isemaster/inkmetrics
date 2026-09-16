@@ -75,6 +75,7 @@ static volatile bool s_link_up = false;
 static volatile net_mode_t s_net_mode = NET_MODE_NONE;
 static char s_ip_str[16] = "";
 static char s_gw_str[16] = "";
+static volatile bool s_ip_conflict;      /* адрес совпал со шлюзом — сеть не работает */
 
 net_mode_t net_mode(void) { return s_net_mode; }
 
@@ -82,6 +83,9 @@ bool net_from_router(void) { return s_net_mode == NET_MODE_ROUTER; }
 
 const char *net_mode_text(void)
 {
+    if (s_ip_conflict) {
+        return "IP CONFLICT";            /* адрес = шлюз: сеть не работает */
+    }
     switch (s_net_mode) {
     case NET_MODE_ROUTER:    return "FROM ROUTER";
     case NET_MODE_EMERGENCY: return "EMERGENCY";
@@ -98,9 +102,22 @@ const char *fw_version_str(void) { return FW_VERSION; }
 static void net_info_refresh(void)
 {
     esp_netif_ip_info_t ip = {0};
+    bool conflict = false;
     if (s_netif && esp_netif_get_ip_info(s_netif, &ip) == ESP_OK) {
         snprintf(s_ip_str, sizeof(s_ip_str), IPSTR, IP2STR(&ip.ip));
         snprintf(s_gw_str, sizeof(s_gw_str), IPSTR, IP2STR(&ip.gw));
+        /* Свой адрес совпал со шлюзом — так бывает, когда раздача на ПК настроена
+           наполовину: адрес выдал её DHCP, а шлюзом числится он же. Сеть в этом
+           состоянии не работает: ни пинг, ни страница. Видно на экране (ADDR и GW). */
+        conflict = (ip.ip.addr != 0 && ip.ip.addr == ip.gw.addr);
+    }
+    if (conflict != s_ip_conflict) {
+        s_ip_conflict = conflict;
+        if (conflict) {
+            ESP_LOGW(TAG, "адрес прибора совпал со шлюзом (" IPSTR ") — сеть не заработает,"
+                     " прошу адрес заново", IP2STR(&ip.ip));
+            diag_step("КОНФЛИКТ: адрес = шлюз = " IPSTR " — прошу адрес заново", IP2STR(&ip.ip));
+        }
     }
 }
 
@@ -748,11 +765,11 @@ static void net_addr_task(void *arg)
         vTaskDelay(pdMS_TO_TICKS(NET_DHCP_RETRY_MS));
 
         if (s_net_mode == NET_MODE_ROUTER) {
-            if (lease_present()) {
+            if (lease_present() && !s_ip_conflict) {
                 continue;
             }
-            ESP_LOGW(TAG, "адрес пропал — прошу заново");
-            diag_step("адрес пропал → прошу заново");
+            ESP_LOGW(TAG, "адрес пропал или конфликтует — прошу заново");
+            diag_step("адрес пропал/конфликт → прошу заново");
             s_net_mode = NET_MODE_NONE;
             esp_netif_dhcpc_stop(s_netif);
             esp_netif_dhcpc_start(s_netif);

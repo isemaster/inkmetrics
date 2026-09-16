@@ -22,7 +22,8 @@
 #define EPD_MOSI      13
 #define EPD_SCLK      12
 #define FB_LEN      5000     /* 200*200/8 — ровно как в Arduino-версии */
-#define DISP_FULL_EVERY 10   /* полное обновление каждое 10-е (стирает «чернила») */
+#define DISP_FULL_EVERY 7    /* полное обновление каждое 7-е (стирает «чернила»;
+                                10 было много: цифры наползали друг на друга) */
 
 static const char *TAG = "display";
 static epaper_driver_display *s_drv;
