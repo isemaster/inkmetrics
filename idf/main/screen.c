@@ -181,6 +181,25 @@ static void show_host(const screen_state_t *st)
     line(176, "HOST SEEN BY WEB");
 }
 
+/* ------------------------------------------------------- страница 3: настройки */
+static void show_settings(const screen_state_t *st)
+{
+    header("SETTINGS", 3);
+
+    line(22, "ROTATE %u", (unsigned)st->rotation);
+    if (st->disk_write_lock) {
+        line(44, "DISK READ ONLY");
+    } else {
+        line(44, "DISK READ WRITE");
+    }
+    line(66, "PING %s", st->ping_target ? st->ping_target : "-");
+    line(88, "FW %s", st->fw ? st->fw : "-");
+    line(110, "BOOT ROTATE");
+    line(132, "HOLD LOCK DISK");
+    line(154, "PWR PAGE");
+    line(176, "WEB /SETUP");
+}
+
 void screen_show(const screen_state_t *st, int page)
 {
     display_clear();
@@ -190,6 +209,9 @@ void screen_show(const screen_state_t *st, int page)
         break;
     case 2:
         show_host(st);
+        break;
+    case 3:
+        show_settings(st);
         break;
     default:
         show_device(st);

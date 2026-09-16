@@ -18,7 +18,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define SCREEN_PAGES      3
+#define SCREEN_PAGES      4
 #define SCREEN_NEVER      0xFFFFFFFFu
 #define SCREEN_PING_LINES 6      /* сколько последних ответов показываем столбиком */
 #define SCREEN_PORTS_LEN  48     /* буфер строки с открытыми портами */
@@ -60,6 +60,11 @@ typedef struct {
 
     /* аварийное состояние: инверсный вид + полное обновление */
     bool        emergency;
+
+    /* настройки (страница SETTINGS) */
+    const char *fw;
+    uint8_t     rotation;          /* 0 / 90 / 180 / 270 */
+    bool        disk_write_lock;   /* диск хоста только для чтения */
 } screen_state_t;
 
 void screen_show(const screen_state_t *st, int page);

@@ -46,6 +46,7 @@
 #include "probe.h"                  /* проверка сервисов хоста по сети */
 #include "ping_inet.h"              /* пинг во внешнюю сеть — то, что на экране */
 #include "netinfo.h"                /* режим адресации: от роутера или аварийный */
+#include "settings.h"               /* настройки прибора (поворот, блокировка диска, цель пинга) */
 #include "lwip/inet.h"
 #include "lwip/sockets.h"
 
@@ -54,10 +55,13 @@
 #define USB_NET_GW    "192.168.7.1"
 #define USB_NET_MTU   1514           /* кадр без FCS: 14 (Ethernet) + 1500 (MTU) */
 #define NET_DHCP_TIMEOUT_MS 15000    /* сколько ждём адрес от роутера локальной сети */
-#define PING_TARGET_NAME "ya.ru"     /* цель пинга во внешнюю сеть (показывается на экране) */
+#define NET_DHCP_RETRY_MS   60000    /* в аварийном режиме — как часто пробуем снова */
+#define NET_DHCP_RETRY_WINDOW_MS 8000   /* сколько ждём ответ в повторной попытке */
+#define NET_RETRY_IF_IDLE_S 20       /* повторяем только если страницу не открывали столько секунд */
+#define PING_TARGET_NAME "ya.ru"     /* цель пинга по умолчанию (значение хранится в настройках) */
 #define PING_TARGET_IP   "77.88.55.242"   /* запасной адрес, если DNS не отвечает */
 #define BOOT_GPIO     0
-#define FW_VERSION    "0.3.1-idf"
+#define FW_VERSION    "0.3.2-idf"
 
 static const char *TAG = "eink";
 static esp_netif_t *s_netif = NULL;
@@ -86,6 +90,9 @@ const char *net_mode_text(void)
 
 const char *net_ip_str(void) { return s_ip_str[0] ? s_ip_str : USB_NET_IP; }
 const char *net_gw_str(void)  { return s_gw_str[0] ? s_gw_str : "-"; }
+
+/* Версия прошивки — для экрана настроек и веб-страницы. */
+const char *fw_version_str(void) { return FW_VERSION; }
 
 static void net_info_refresh(void)
 {
@@ -513,34 +520,46 @@ static void enable_verbose_tags(void)
     diag_step("включены подробные логи сети (esp_netif/dhcps/tusb_net)");
 }
 
-/* Адрес прибора: сначала просим у роутера локальной сети (DHCP-клиент), если за
-   NET_DHCP_TIMEOUT_MS адреса нет — аварийный режим: свой адрес 192.168.7.1 и
-   DHCP-сервер для хоста, чтобы прибор остался доступным (см. docs/addressing.md). */
-static void net_addr_task(void *arg)
+/* Адрес прибора. Порядок (решения 16.09, см. docs/addressing.md и docs/plan-usb-installer.md):
+     1. просим адрес у роутера (обычный DHCP-клиент) — это основной способ;
+     2. адреса нет за NET_DHCP_TIMEOUT_MS — аварийный режим: свой 192.168.7.1 и DHCP-сервер
+        для хоста, чтобы прибор остался доступным;
+     3. в аварийном режиме раз в NET_DHCP_RETRY_MS пробуем снова: раздачу (ICS) на ПК могли
+        включить уже после загрузки прибора (в том числе скриптом с его же диска). Повтор
+        делаем только если страницу прибора не открывали NET_RETRY_IF_IDLE_S секунд — на время
+        попытки аварийный адрес 192.168.7.1 пропадает. */
+static bool lease_present(void)
 {
-    (void)arg;
+    esp_netif_ip_info_t ip = {0};
+    return s_netif && esp_netif_get_ip_info(s_netif, &ip) == ESP_OK && ip.ip.addr != 0;
+}
 
-    for (int i = 0; i < NET_DHCP_TIMEOUT_MS / 500; i++) {
+static bool wait_lease(int ms)
+{
+    for (int i = 0; i < ms / 500; i++) {
         vTaskDelay(pdMS_TO_TICKS(500));
-        esp_netif_ip_info_t ip = {0};
-        if (!s_netif) {
-            continue;
-        }
-        if (esp_netif_get_ip_info(s_netif, &ip) == ESP_OK && ip.ip.addr != 0) {
-            s_net_mode = NET_MODE_ROUTER;
-            net_info_refresh();
-            ESP_LOGI(TAG, "адрес от роутера локальной сети: " IPSTR " (шлюз " IPSTR ")",
-                     IP2STR(&ip.ip), IP2STR(&ip.gw));
-            diag_step("адрес от роутера: " IPSTR ", шлюз " IPSTR, IP2STR(&ip.ip), IP2STR(&ip.gw));
-            ping_inet_enable(true);          /* есть маршрут — можно пинговать интернет */
-            vTaskDelete(NULL);
-            return;
+        if (lease_present()) {
+            return true;
         }
     }
+    return false;
+}
 
-    ESP_LOGW(TAG, "адрес от роутера не получен за %d с — аварийный режим", NET_DHCP_TIMEOUT_MS / 1000);
-    diag_step("DHCP-адрес не получен за %d с → аварийный режим", NET_DHCP_TIMEOUT_MS / 1000);
-    esp_netif_dhcpc_stop(s_netif);
+static void enter_router_mode(void)
+{
+    esp_netif_ip_info_t ip = {0};
+    if (s_netif) {
+        esp_netif_get_ip_info(s_netif, &ip);
+    }
+    s_net_mode = NET_MODE_ROUTER;
+    net_info_refresh();
+    ESP_LOGI(TAG, "адрес получен: " IPSTR " (шлюз " IPSTR ")", IP2STR(&ip.ip), IP2STR(&ip.gw));
+    diag_step("адрес получен: " IPSTR ", шлюз " IPSTR, IP2STR(&ip.ip), IP2STR(&ip.gw));
+    ping_inet_enable(true);              /* есть маршрут — можно пинговать интернет */
+}
+
+static void enter_emergency_mode(void)
+{
     esp_netif_ip_info_t st = {0};
     esp_netif_str_to_ip4(USB_NET_IP, &st.ip);
     esp_netif_str_to_ip4(USB_NET_GW, &st.gw);
@@ -552,8 +571,72 @@ static void net_addr_task(void *arg)
     ESP_LOGW(TAG, "аварийный режим: прибор " USB_NET_IP ", DHCP-сервер для хоста (%s)",
              esp_err_to_name(err));
     diag_step("аварийный режим: " USB_NET_IP " + DHCP-сервер — %s", esp_err_to_name(err));
-    ping_inet_enable(false);                 /* маршрута в сеть нет */
-    vTaskDelete(NULL);
+    ping_inet_enable(false);             /* маршрута в сеть нет */
+}
+
+/* Повторная попытка: снимаем аварийную настройку и снова просим адрес по DHCP. */
+static bool retry_dhcp(void)
+{
+    esp_netif_dhcps_stop(s_netif);
+    esp_netif_ip_info_t zero = {0};
+    esp_netif_set_ip_info(s_netif, &zero);
+    esp_netif_dhcpc_start(s_netif);
+    if (wait_lease(NET_DHCP_RETRY_WINDOW_MS)) {
+        enter_router_mode();
+        return true;
+    }
+    esp_netif_dhcpc_stop(s_netif);
+    enter_emergency_mode();
+    return false;
+}
+
+static void net_addr_task(void *arg)
+{
+    (void)arg;
+
+    if (wait_lease(NET_DHCP_TIMEOUT_MS)) {
+        enter_router_mode();
+    } else {
+        ESP_LOGW(TAG, "адрес от роутера не получен за %d с — аварийный режим",
+                 NET_DHCP_TIMEOUT_MS / 1000);
+        diag_step("DHCP-адрес не получен за %d с → аварийный режим", NET_DHCP_TIMEOUT_MS / 1000);
+        esp_netif_dhcpc_stop(s_netif);
+        enter_emergency_mode();
+    }
+
+    /* Сторож: адрес потеряли или раздачу на ПК включили позже — прибор должен подхватить
+       её сам, без передёргивания USB (иначе он навсегда останется на 192.168.7.1). */
+    while (true) {
+        vTaskDelay(pdMS_TO_TICKS(NET_DHCP_RETRY_MS));
+
+        if (s_net_mode == NET_MODE_ROUTER) {
+            if (lease_present()) {
+                continue;
+            }
+            ESP_LOGW(TAG, "адрес пропал — прошу заново");
+            diag_step("адрес пропал → прошу заново");
+            s_net_mode = NET_MODE_NONE;
+            esp_netif_dhcpc_stop(s_netif);
+            esp_netif_dhcpc_start(s_netif);
+            if (wait_lease(NET_DHCP_RETRY_WINDOW_MS)) {
+                enter_router_mode();
+            } else {
+                esp_netif_dhcpc_stop(s_netif);
+                enter_emergency_mode();
+            }
+            continue;
+        }
+
+        /* аварийный режим: пробуем снова, но не мешая тому, кто сейчас смотрит страницу */
+        selfcheck_status_t sc;
+        selfcheck_status(&sc);
+        if (sc.http_age_s != SELFCHECK_NEVER && sc.http_age_s < NET_RETRY_IF_IDLE_S) {
+            continue;
+        }
+        ESP_LOGI(TAG, "аварийный режим: пробую получить адрес заново");
+        diag_step("аварийный режим: повторная попытка DHCP");
+        retry_dhcp();
+    }
 }
 
 static void start_usb_net(void)
@@ -676,6 +759,7 @@ void app_main(void)
     }
     ESP_ERROR_CHECK(ret);
     diag_step("NVS готова");
+    settings_init();               /* настройки: поворот экрана, блокировка диска, цель пинга */
 
     esp_err_t ierr = esp_netif_init();
     diag_step("esp_netif_init → %s", esp_err_to_name(ierr));
@@ -689,7 +773,7 @@ void app_main(void)
     diag_step("start_usb_net вернулся (link %s)", s_link_up ? "есть" : "нет");
     start_http();
     selfcheck_start(s_netif);   /* следим за хостом и уходим в загрузчик, если он молчит */
-    ping_inet_init(PING_TARGET_NAME, PING_TARGET_IP);   /* пинг во внешнюю сеть (для экрана) */
+    ping_inet_init(settings_get()->ping_target, PING_TARGET_IP);  /* цель — из настроек */
     ui_init();                  /* панель, SHTC3 и кнопки: прибор начинает показывать состояние */
 
     ESP_LOGI(TAG, "готово: страница прибора откроется по адресу, который выдал роутер");

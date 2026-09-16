@@ -29,6 +29,7 @@ static epaper_driver_display *s_drv;
 static uint8_t *s_fb;
 static bool s_ready;
 static bool s_have_base;     /* базовый образ панели (0x26) записан */
+static bool s_need_full;     /* следующий вывод — обязательно полный (сменился поворот) */
 static int  s_since_full;    /* сколько частичных обновлений после последнего полного */
 
 static void fb_px(int x, int y, bool black)
@@ -43,6 +44,65 @@ static void fb_px(int x, int y, bool black)
     } else {
         s_fb[idx] |= (uint8_t)(1u << bit);
     }
+}
+
+/* --------------------------------------------------- поворот кадра (настройка) */
+static uint8_t s_rot_deg;              /* 0 / 90 / 180 / 270 */
+static uint8_t s_rot_buf[FB_LEN];      /* временный буфер для поворота */
+
+static bool fb_get(const uint8_t *b, int x, int y)
+{
+    uint16_t idx = (uint16_t)(y * (DISP_W / 8) + (x >> 3));
+    uint8_t bit = (uint8_t)(7 - (x & 7));
+    return (b[idx] & (1u << bit)) == 0;      /* бит снят = чёрный */
+}
+
+static void fb_put(uint8_t *b, int x, int y, bool black)
+{
+    if (x < 0 || y < 0 || x >= DISP_W || y >= DISP_H) {
+        return;
+    }
+    uint16_t idx = (uint16_t)(y * (DISP_W / 8) + (x >> 3));
+    uint8_t bit = (uint8_t)(7 - (x & 7));
+    if (black) {
+        b[idx] &= (uint8_t)~(1u << bit);
+    } else {
+        b[idx] |= (uint8_t)(1u << bit);
+    }
+}
+
+void display_set_rotation(uint8_t deg)
+{
+    if (deg != 90 && deg != 180 && deg != 270) {
+        deg = 0;
+    }
+    if (deg != s_rot_deg) {
+        s_need_full = true;      /* после смены поворота нужен полный кадр: базовый образ другой */
+    }
+    s_rot_deg = deg;
+}
+
+/* Поворот делаем один раз перед выводом кадра — рисование всегда идёт «как есть». */
+static void apply_rotation(void)
+{
+    if (!s_rot_deg || !s_fb) {
+        return;
+    }
+    memset(s_rot_buf, 0xFF, FB_LEN);
+    for (int y = 0; y < DISP_H; y++) {
+        for (int x = 0; x < DISP_W; x++) {
+            bool v = fb_get(s_fb, x, y);
+            int nx = x, ny = y;
+            switch (s_rot_deg) {
+            case 90:  nx = DISP_H - 1 - y; ny = x;               break;
+            case 180: nx = DISP_W - 1 - x; ny = DISP_H - 1 - y;  break;
+            case 270: nx = y;              ny = DISP_W - 1 - x;  break;
+            default: break;
+            }
+            fb_put(s_rot_buf, nx, ny, v);
+        }
+    }
+    memcpy(s_fb, s_rot_buf, FB_LEN);
 }
 
 /* --------------------------------------------------------------- шрифты */
@@ -217,7 +277,9 @@ void display_show(bool force_full)
     if (!s_ready || !s_drv) {
         return;
     }
-    if (force_full || !s_have_base || s_since_full >= DISP_FULL_EVERY) {
+    apply_rotation();
+    if (force_full || !s_have_base || s_need_full || s_since_full >= DISP_FULL_EVERY) {
+        s_need_full = false;
         refresh_full();
         return;
     }

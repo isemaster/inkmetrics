@@ -25,5 +25,6 @@ bool        net_from_router(void);      /* есть маршрут в сеть (
 const char *net_mode_text(void);        /* "FROM ROUTER" / "EMERGENCY" / "NO ADDR" */
 const char *net_ip_str(void);           /* адрес прибора (для входа в браузер) */
 const char *net_gw_str(void);           /* шлюз, если известен, иначе "-" */
+const char *fw_version_str(void);       /* версия прошивки (экран настроек, веб-страница) */
 
 #endif /* NETINFO_H */

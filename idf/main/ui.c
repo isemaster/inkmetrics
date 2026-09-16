@@ -26,6 +26,7 @@
 #include "probe.h"
 #include "screen.h"
 #include "selfcheck.h"
+#include "settings.h"
 #include "shtc3.h"
 #include "timesync.h"
 
@@ -44,6 +45,22 @@ static bool s_sensor_ok;
 
 static void btn_cb(btn_id_t btn, btn_event_t ev)
 {
+    /* На странице настроек (последняя) кнопка BOOT управляет настройками:
+       короткое нажатие — поворот экрана по кругу, удержание — блокировка записи на диск. */
+    if (btn == BTN_BOOT && s_page == SCREEN_PAGES - 1) {
+        if (ev == BTN_EV_HOLD) {
+            const settings_t *cfg = settings_get();
+            settings_set_disk_write_lock(!cfg->disk_write_lock);
+            ESP_LOGW(TAG, "настройки: диск %s", settings_get()->disk_write_lock ?
+                     "только чтение" : "чтение и запись");
+        } else if (ev == BTN_EV_SHORT) {
+            uint8_t deg = settings_rotation_next();
+            ESP_LOGI(TAG, "настройки: поворот экрана %u", (unsigned)deg);
+        }
+        s_redraw = true;
+        return;
+    }
+
     if (ev == BTN_EV_HOLD) {
         /* Удержание пока только помечаем: уход в загрузчик по кнопке — отдельный
            вопрос (есть /api/boot и автопереход самопроверки, см. ISSUES З-33). */
@@ -64,6 +81,10 @@ static void ui_task(void *arg)
     int64_t last_draw = 0, last_sensor = 0;
     float t = 0, rh = 0;
     bool first = true;
+
+    /* цель пинга берём из настроек и следим за изменениями (её правят на странице настроек) */
+    char ping_applied[SETTINGS_PING_LEN];
+    snprintf(ping_applied, sizeof(ping_applied), "%s", settings_get()->ping_target);
 
     while (true) {
         vTaskDelay(pdMS_TO_TICKS(500));
@@ -92,6 +113,12 @@ static void ui_task(void *arg)
         bool online = sc.enabled ? (sc.silence_s < ONLINE_WINDOW_S) : host_seen;
         bool router = net_from_router();
         ping_inet_enable(router);          /* без адреса от роутера маршрута в сеть нет */
+
+        const settings_t *cfg = settings_get();
+        if (strcmp(cfg->ping_target, ping_applied) != 0) {
+            snprintf(ping_applied, sizeof(ping_applied), "%s", cfg->ping_target);
+            ping_inet_set_target(cfg->ping_target, NULL);   /* цель изменили — перезапустить пинг */
+        }
 
         if (sc.host_known) {               /* цель проверок портов и SNTP — адрес хоста */
             probe_set_host(sc.host);
@@ -138,6 +165,10 @@ static void ui_task(void *arg)
         st.web_ok = pr.http_ok;
         st.web_code = pr.http_code;
         st.web_ms = pr.http_ms;
+
+        st.fw = fw_version_str();
+        st.rotation = cfg->rotation;
+        st.disk_write_lock = cfg->disk_write_lock;
 
         st.emergency = !online;            /* авария: инверсия + полное обновление */
 

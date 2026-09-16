@@ -30,6 +30,7 @@ static volatile uint32_t s_dhcp_frames;
 static volatile uint64_t s_boot_us;
 static volatile uint64_t s_last_host_us;   /* любой признак хоста; 0 = не было */
 static volatile uint64_t s_last_reply_us;  /* ответ на ping; 0 = не было */
+static volatile uint64_t s_last_http_us;   /* запрос к нашей странице; 0 = не было */
 static volatile uint32_t s_ping_ok, s_ping_fail;
 static volatile uint32_t s_host_ip;        /* сетевой порядок; 0 = неизвестен */
 static char              s_ping_target[16] = "";
@@ -326,6 +327,7 @@ void selfcheck_http_hit(void)
 {
     s_http_hits++;
     s_last_host_us = now_us();       /* хост дотянулся до нас — значит связь есть */
+    s_last_http_us = now_us();
 }
 
 /* Хост назвал себя сам: браузер на его стороне открыл нашу страницу. В режиме моста
@@ -370,6 +372,7 @@ void selfcheck_status(selfcheck_status_t *out)
     out->ping_ok = s_ping_ok;
     out->ping_fail = s_ping_fail;
     out->ping_age_s = age_s(s_last_reply_us);
+    out->http_age_s = age_s(s_last_http_us);
     out->http_hits = s_http_hits;
     out->host_frames = s_host_frames;
     out->dhcp_frames = s_dhcp_frames;

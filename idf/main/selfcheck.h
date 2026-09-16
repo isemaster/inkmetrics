@@ -46,6 +46,7 @@ typedef struct {
     uint32_t ping_ok;          /* успешных ответов */
     uint32_t ping_fail;        /* таймаутов */
     uint32_t ping_age_s;       /* секунд с последнего ответа (NEVER = не отвечал) */
+    uint32_t http_age_s;       /* секунд с последнего запроса к нашей странице (NEVER = не было) */
     uint32_t http_hits;        /* запросов от хоста к веб-серверу */
     uint32_t host_frames;      /* кадров от хоста всего */
     uint32_t dhcp_frames;      /* из них DHCP (хост запрашивает адрес) */
