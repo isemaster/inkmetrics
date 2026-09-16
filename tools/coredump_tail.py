@@ -35,10 +35,17 @@ NOTE_NAMES = (
 )
 
 CAUSE = {
-    0: "нет причины", 1: "сброс", 2: "ошибка инструкции", 3: "load/store",
-    4: "причина 4 (адрес)", 5: "причина 5 (адрес)", 6: "нелегальная инструкция",
-    9: "ошибка выравнивания", 20: "инструкция читает память", 24: "инструкция пишет память",
-    28: "деление на ноль", 29: "ошибка деления", 33: "ошибка окна регистров",
+    0: "IllegalInstruction (при abort() причина не выставляется — 0)",
+    1: "Syscall", 2: "InstructionFetchError", 3: "LoadStoreError", 4: "Level1Interrupt",
+    5: "Alloca", 6: "IntegerDivideByZero (деление на ноль)", 7: "PCValue", 8: "Privileged",
+    9: "LoadStoreAlignment (невыровненный доступ)",
+    12: "InstrPDAddrError", 13: "LoadStorePIFDataError", 14: "InstrPIFAddrError",
+    15: "LoadStorePIFAddrError", 16: "InstTLBMiss", 17: "InstTLBMultiHit", 18: "InstFetchPrivilege",
+    20: "InstrFetchProhibited", 24: "LoadStoreTLBMiss", 25: "LoadStoreTLBMultihit",
+    26: "LoadStorePrivilege",
+    28: "LoadProhibited (чтение по недопустимому адресу)",
+    29: "StoreProhibited (запись по недопустимому адресу)",
+    32: "Cp0Dis", 33: "Cp1Dis",
 }
 
 

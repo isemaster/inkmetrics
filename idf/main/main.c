@@ -45,6 +45,7 @@
 #define USB_NET_IP    "192.168.7.1"
 #define USB_NET_MASK  "255.255.255.0"
 #define USB_NET_GW    "192.168.7.1"
+#define USB_NET_MTU   1514           /* кадр без FCS: 14 (Ethernet) + 1500 (MTU) */
 #define BOOT_GPIO     0
 #define FW_VERSION    "0.3.0-idf"
 
@@ -131,26 +132,39 @@ bool tud_network_recv_cb(const uint8_t *src, uint16_t size)
     return true;
 }
 
-/* TinyUSB просит заполнить свой буфер кадром из lwIP */
+/* TinyUSB просит заполнить свой буфер кадром из lwIP.
+   ref — уже линейный кадр, arg — его длина: так его передаёт наш usb_transmit
+   (см. ниже про контракт esp_netif). Раньше здесь стоял pbuf_copy_partial по
+   указателю, приведённому к struct pbuf*, и первый же кадр читал мусор. */
 uint16_t tud_network_xmit_cb(uint8_t *dst, void *ref, uint16_t arg)
 {
-    struct pbuf *p = (struct pbuf *)ref;
-    (void)arg;
-    return pbuf_copy_partial(p, dst, p->tot_len, 0);
+    memcpy(dst, ref, arg);
+    return arg;
 }
 
 void tud_network_init_cb(void)
 {
 }
 
-/* lwIP хочет отправить кадр — отдаём его стеку USB */
+/* lwIP хочет отправить кадр — отдаём его стеку USB.
+ *
+ * ВАЖНО (нашли 16.09 по дампу паники): buffer — это НЕ pbuf, а линейный кадр
+ * (q->payload, q->len) — так его передаёт esp_netif: components/esp_netif/lwip/netif/
+ * ethernetif.c:84 «esp_netif_transmit(esp_netif, q->payload, q->len)». Раньше здесь
+ * стояло приведение к struct pbuf*, и первый же исходящий кадр (ответ DHCP) читал
+ * «pbuf» из байтов MAC-адреса → pbuf_copy_partial шёл по мусорному указателю →
+ * LoadProhibited (cause 28, vaddr 0x0472e820) в задаче lwIP «tiT» → плата
+ * перезагружалась через ~20 с после включения, адрес по DHCP хост не получал
+ * (З-01). Проверять контракт драйвера по исходникам IDF, а не по примерам TinyUSB. */
 static esp_err_t usb_transmit(void *h, void *buffer, size_t len)
 {
-    struct pbuf *p = (struct pbuf *)buffer;
-    if (!tud_network_can_xmit(p->tot_len)) {
-        return ESP_ERR_NO_MEM;
+    if (len == 0 || len > USB_NET_MTU) {
+        return ESP_ERR_INVALID_SIZE;
     }
-    tud_network_xmit(p, 0);
+    if (!tud_network_can_xmit((uint16_t)len)) {
+        return ESP_ERR_NO_MEM;          /* хост ещё не готов принимать — lwIP повторит */
+    }
+    tud_network_xmit(buffer, (uint16_t)len);   /* ref = кадр, arg = длина */
     s_tx_frames++;
     return ESP_OK;
 }
