@@ -1,0 +1,15 @@
+# сборка и кэш
+firmware/build/
+__pycache__/
+*.pyc
+
+# инструменты: локальные бинарники (54 МБ), не в git
+tools/*.exe
+tools/*.msi
+
+# дампы прошивок (8 МБ каждый)
+firmware/backup/
+
+# локальные превью кадров
+host/*.png
+host/config.json.bak
