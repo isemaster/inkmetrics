@@ -21,6 +21,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -132,8 +133,8 @@ WHAT_TO_DO = """inkmetrics — прошивка прибора на этом к�
 Если интернета у прибора нет
 ----------------------------
 Запустите pc-setup\\NETCHECK.PS1 и посмотрите строки про раздачу и адаптер прибора.
-Подробная инструкция (мост или раздача, что делать при сбоях) — docs/pc-setup-bridge.md
-в папке проекта.
+Подробная инструкция по сети на ПК (раздача или мост, что делать при сбоях) лежит рядом:
+pc-setup\\GUIDE-RU.txt.
 
 Если прибор показывает NET EMERGENCY и адрес 192.168.7.1
 --------------------------------------------------------
@@ -175,6 +176,7 @@ def main() -> int:
         ("NETCHECK.PS1", ROOT / "tools" / "net_check2.ps1"),
         ("READRU.TXT", PC_SETUP_SRC / "README-RU.txt"),
         ("READMEEN.TXT", PC_SETUP_SRC / "README-EN.txt"),
+        ("GUIDE-RU.txt", ROOT / "docs" / "pc-setup-bridge.md"),   # полная инструкция по сети на ПК
     ]:
         shutil.copy2(src, pc_dst / name)
     # SETUP.CMD берём из образа диска, чтобы файлы не разъехались
@@ -187,8 +189,11 @@ def main() -> int:
     print(f"  pc-setup/              {len(list(pc_dst.iterdir()))} файлов")
 
     (KIT / "flash.bat").write_bytes(FLASH_BAT.replace("\n", "\r\n").encode("ascii"))
-    (KIT / "WHAT-TO-DO.txt").write_bytes("\ufeff".encode("utf-8") + WHAT_TO_DO.replace("\n", "\r\n").encode("utf-8"))
-    print("  flash.bat, WHAT-TO-DO.txt")
+    (KIT / "START-HERE.txt").write_bytes("\ufeff".encode("utf-8") + WHAT_TO_DO.replace("\n", "\r\n").encode("utf-8"))
+    old_what = KIT / "WHAT-TO-DO.txt"
+    if old_what.exists():
+        old_what.unlink()        # переименовали в START-HERE.txt
+    print("  flash.bat, START-HERE.txt")
 
     # объединённый образ одним файлом — ТОЛЬКО по ключу --merged: он весит ~8 МБ
     # (заполняется до всего флеша), а для прошивки хватает flash.bat
@@ -206,6 +211,24 @@ def main() -> int:
     elif merged.exists():
         merged.unlink()          # старый, от прошлой сборки, только путает
         print("  объединённый образ убран (нужен — запустите с ключом --merged)")
+
+    # контрольные суммы + архив для переноса на другой ПК
+    import hashlib
+    import zipfile
+    lines = []
+    for p in sorted(KIT.rglob("*")):
+        if p.is_file() and p.name != "SHA256SUMS.txt":
+            rel = p.relative_to(KIT).as_posix()
+            lines.append(f"{hashlib.sha256(p.read_bytes()).hexdigest()}  {rel}")
+    (KIT / "SHA256SUMS.txt").write_bytes("\n".join(lines).encode("utf-8") + b"\n")
+
+    stamp = time.strftime("%Y-%m-%d")
+    zip_path = ROOT / f"flash-kit-inkmetrics-{stamp}.zip"
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
+        for p in sorted(KIT.rglob("*")):
+            if p.is_file():
+                z.write(p, Path("inkmetrics-kit") / p.relative_to(KIT))
+    print(f"  архив для переноса   {zip_path.name} ({zip_path.stat().st_size} Б)")
 
     print(f"комплект готов: {KIT}")
     return 0
