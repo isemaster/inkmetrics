@@ -3,8 +3,10 @@
 # Usage:
 #   powershell -NoProfile -ExecutionPolicy Bypass -File net_check2.ps1
 #   powershell -NoProfile -ExecutionPolicy Bypass -File net_check2.ps1 -Device 192.168.1.26
+#   ... -NoPause      (не ждать Enter в конце — если скрипт зовут из другого скрипта)
 param(
-    [string]$Device = ""
+    [string]$Device = "",
+    [switch]$NoPause
 )
 
 $ErrorActionPreference = "Continue"
@@ -72,3 +74,15 @@ if ($Device -ne "") {
 Write-Host "== SharedAccess (ICS) service =="
 Get-Service SharedAccess | Select-Object Name, Status, StartType |
     Format-Table -AutoSize | Out-String -Width 120 | Write-Host
+
+# Пауза в конце: при запуске двойным кликом окно иначе закрывается вместе со скриптом,
+# и вывод прочитать нельзя. Ключ -NoPause нужен тем, кто зовёт скрипт из другого скрипта,
+# а если ввод перенаправлен (запуск из конвейера) — не ждём вообще.
+if (-not $NoPause) {
+    $interactive = $true
+    try { if ([Console]::IsInputRedirected) { $interactive = $false } } catch { }
+    if ($interactive) {
+        Write-Host ""
+        try { [void](Read-Host "Press Enter to close"); } catch { }
+    }
+}

@@ -17,6 +17,7 @@ param(
     [switch]$Off,
     [switch]$DryRun,
     [switch]$Quiet,
+    [switch]$NoPause,
     [string]$Public = "",
     [string]$Private = ""
 )
@@ -156,3 +157,14 @@ if ($addr) {
 
 Say "shared adapter on this PC is now 192.168.137.1; device address is shown on the device screen"
 exit 0
+
+# Пауза в конце, чтобы окно не исчезало при запуске двойным кликом. Задание
+# планировщика и установщик агента зовут скрипт с -NoPause (ждать Enter там некому).
+if (-not $NoPause) {
+    $interactive = $true
+    try { if ([Console]::IsInputRedirected) { $interactive = $false } } catch { }
+    if ($interactive) {
+        Write-Host ""
+        try { [void](Read-Host "Press Enter to close"); } catch { }
+    }
+}

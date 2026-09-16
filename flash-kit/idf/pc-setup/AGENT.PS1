@@ -71,10 +71,10 @@ if ($DryRun) {
 $icsInstalled = Join-Path $InstallDir "ICS.PS1"
 if (-not (Test-Path $icsInstalled)) { $icsInstalled = Join-Path $SourceDir "ICS.PS1" }
 if ($DryRun) {
-    Say ("DRY RUN: would run " + $icsInstalled)
+    Say ("DRY RUN: would run " + $icsInstalled + " -NoPause")
 } else {
     if (Test-Path $icsInstalled) {
-        & powershell -NoProfile -ExecutionPolicy Bypass -File $icsInstalled
+        & powershell -NoProfile -ExecutionPolicy Bypass -File $icsInstalled -NoPause
     } else {
         Say "WARN: ICS.PS1 not found next to the installer - sharing was not touched"
     }
@@ -83,7 +83,7 @@ if ($DryRun) {
 # ---------------------------------------------------------------- 3. scheduled task
 $action = New-ScheduledTaskAction -Execute "powershell.exe" `
     -Argument ("-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"" +
-               (Join-Path $InstallDir "ICS.PS1") + "`" -Quiet")
+               (Join-Path $InstallDir "ICS.PS1") + "`" -NoPause -Quiet")
 
 $t1 = New-ScheduledTaskTrigger -AtStartup
 $t2 = New-ScheduledTaskTrigger -AtLogOn
