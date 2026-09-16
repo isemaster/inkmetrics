@@ -20,6 +20,12 @@ CONFIG_USJ_ENABLE_USB_SERIAL_JTAG=n
 
 # логи и задачи
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+# Максимальный уровень DEBUG: без него ESP_LOGD вырезан на этапе компиляции, и
+# подробные логи сети (esp_netif/dhcps/tusb_net) в «чёрный ящик» не попадают —
+# а именно они нужны, чтобы понять, почему хост не получает адрес по DHCP.
+CONFIG_LOG_MAXIMUM_LEVEL_DEBUG=y
+# максимум не равен уровню по умолчанию, иначе DEBUG снова вырезается
+# CONFIG_LOG_MAXIMUM_EQUALS_DEFAULT is not set
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=4096
 CONFIG_FREERTOS_HZ=1000
 

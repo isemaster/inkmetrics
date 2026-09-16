@@ -295,14 +295,38 @@ static void usb_event_cb(tinyusb_event_t *event, void *arg)
     const char *name = "прочее";
     if (event->id == TINYUSB_EVENT_ATTACHED) {
         name = "хост подключился";
+        /* Хост подключился — с этого момента кадры можно и принимать, и отдавать.
+           Раньше s_link_up просто выставлялся после установки стека, и при
+           отключении хоста lwIP об этом не узнавал. */
+        if (s_netif) {
+            esp_netif_action_connected(s_netif, NULL, 0, NULL);
+        }
+        s_link_up = true;
     } else if (event->id == TINYUSB_EVENT_DETACHED) {
         name = "хост отключился";
+        if (s_netif) {
+            esp_netif_action_disconnected(s_netif, NULL, 0, NULL);
+        }
+        s_link_up = false;
     }
     ESP_LOGI(TAG, "USB-событие: %s", name);
     diag_step("USB-событие: %s (порт %u)", name, (unsigned)event->rhport);
 }
 
 /* ------------------------------------------------------------------- USB-сеть */
+/* Подробные логи сети — в «чёрный ящик» (diag.c сохраняет строки этих тегов в любом
+   уровне). Нужно, чтобы видеть обмен DHCP, когда хост не получает адрес. */
+static void enable_verbose_tags(void)
+{
+    static const char *tags[] = {
+        "esp_netif", "esp_netif_lwip", "dhcps", "lwip", "tusb_net", "tinyusb_task", "tusb_desc"
+    };
+    for (size_t i = 0; i < sizeof(tags) / sizeof(tags[0]); i++) {
+        esp_log_level_set(tags[i], ESP_LOG_DEBUG);
+    }
+    diag_step("включены подробные логи сети (esp_netif/dhcps/tusb_net)");
+}
+
 static void start_usb_net(void)
 {
     esp_netif_inherent_config_t base = ESP_NETIF_INHERENT_DEFAULT_ETH();
@@ -341,10 +365,17 @@ static void start_usb_net(void)
     esp_netif_action_start(s_netif, NULL, 0, NULL);
     esp_netif_action_connected(s_netif, NULL, 0, NULL);
 
-    /* хост получит адрес от прибора (сам прибор — 192.168.7.1) */
+    /* хост получит адрес от прибора (сам прибор — 192.168.7.1).
+       ALREADY_STARTED — не ошибка: сервер уже поднят автоматически, потому что флаг
+       ESP_NETIF_DHCP_SERVER задан в inherent-конфиге netif. */
     esp_err_t err = esp_netif_dhcps_start(s_netif);
-    ESP_LOGI(TAG, "DHCP-сервер: %s", err == ESP_OK ? "поднят" : esp_err_to_name(err));
-    diag_step("DHCP-сервер → %s", esp_err_to_name(err));
+    bool dhcps_ok = (err == ESP_OK) || (err == ESP_ERR_ESP_NETIF_DHCP_ALREADY_STARTED);
+    ESP_LOGI(TAG, "DHCP-сервер: %s", dhcps_ok ? "поднят" : esp_err_to_name(err));
+    if (!dhcps_ok) {
+        diag_step("DHCP-сервер → %s", esp_err_to_name(err));
+    } else {
+        diag_step("DHCP-сервер поднят (%s)", esp_err_to_name(err));
+    }
 
 #if CONFIG_TINYUSB_NET_MODE_NONE
     ESP_LOGW(TAG, "диагностический режим: USB-сеть выключена, логи в USB Serial/JTAG");
@@ -397,6 +428,7 @@ void app_main(void)
     ESP_LOGI(TAG, "=== inkmetrics IDF %s: старт, сброс %d, чёрный ящик %s",
              FW_VERSION, (int)esp_reset_reason(), dg == ESP_OK ? "готов" : "НЕ ПОДНЯЛСЯ");
     diag_step("app_main: ящик → %s (heap %u)", esp_err_to_name(dg), (unsigned)esp_get_free_heap_size());
+    enable_verbose_tags();
 
     boot_escape_check();
     diag_step("boot_escape_check пройден (BOOT не удержан)");

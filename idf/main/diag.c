@@ -37,8 +37,17 @@
 
 #define DIAG_MAGIC  0x31474144u   /* "DAG1" */
 #define DIAG_HDR    0x40          /* заголовок (4 слова) + запас */
-#define DIAG_ERASE  (8 * 1024)    /* сколько стираем и сколько отводим под лог */
+#define DIAG_ERASE  (16 * 1024)   /* сколько стираем и сколько отводим под лог */
 #define SECTOR      4096
+
+/*
+ * Теги, строки которых сохраняем в любом уровне (не только WARN/ERROR).
+ * Нужны при разборе сети: видно, что происходит с DHCP-сервером и USB-сетью.
+ * Уровень DEBUG для этих тегов включается в main.c (enable_verbose_tags).
+ */
+static const char *const s_keep_tags[] = {
+    "esp_netif", "esp_netif_lwip", "dhcps", "lwip", "tusb_net", "tinyusb_task", "tusb_desc"
+};
 
 static uint32_t s_off = DIAG_HDR; /* куда пишем следующую порцию */
 static uint32_t s_boots;          /* номер этой загрузки */
@@ -99,6 +108,30 @@ void diag_flush(void)
     /* всё пишется потоком, буфера нет — функция оставлена для совместимости */
 }
 
+/* Строка логов вида "I (1234) tag: текст": вытаскиваем тег и решаем, сохранять ли. */
+static bool tag_interesting(const char *line)
+{
+    const char *p = strchr(line, ')');
+    if (!p) {
+        return false;
+    }
+    p++;
+    while (*p == ' ') {
+        p++;
+    }
+    const char *colon = strstr(p, ": ");
+    if (!colon) {
+        return false;
+    }
+    size_t len = (size_t)(colon - p);
+    for (size_t i = 0; i < sizeof(s_keep_tags) / sizeof(s_keep_tags[0]); i++) {
+        if (strlen(s_keep_tags[i]) == len && strncmp(p, s_keep_tags[i], len) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static int diag_vprintf(const char *fmt, va_list ap)
 {
     va_list copy;
@@ -109,8 +142,13 @@ static int diag_vprintf(const char *fmt, va_list ap)
     int m = vsnprintf(tmp, sizeof(tmp), fmt, copy);
     va_end(copy);
 
-    /* строку уровня WARN/ERROR сохраняем сразу: следующей может уже не быть */
-    if (m > 0 && (tmp[0] == 'E' || tmp[0] == 'W') && tmp[1] == ' ') {
+    /* строку уровня WARN/ERROR сохраняем сразу: следующей может уже не быть;
+       строки «интересных» тегов — в любом уровне (например DHCP-сервер) */
+    bool save = false;
+    if (m > 0) {
+        save = ((tmp[0] == 'E' || tmp[0] == 'W') && tmp[1] == ' ') || tag_interesting(tmp);
+    }
+    if (save) {
         flash_append(tmp, m < (int)sizeof(tmp) ? (size_t)m : sizeof(tmp) - 1);
         flash_append("\r\n", 2);
     }
