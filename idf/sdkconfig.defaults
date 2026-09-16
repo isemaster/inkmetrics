@@ -1,0 +1,18 @@
+# ESP32-S3-ePaper-1.54 (Waveshare, V2): 8 МБ флеша, без PSRAM
+CONFIG_IDF_TARGET="esp32s3"
+CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
+
+# наша раскладка разделов (см. partitions.csv)
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# USB-сеть: прибор отдаёт хосту сетевую карту.
+# ECM/RNDIS вместо NCM: Windows не ставит драйвер на наш NCM (CM_PROB_FAILED_INSTALL),
+# а RNDIS для неё родной — TinyUSB сам подсовывает Windows нужный режим через MS-описания.
+CONFIG_TINYUSB_NET_MODE_ECM_RNDIS=y
+#CONFIG_TINYUSB_NET_MODE_NCM=y
+
+# логи и задачи
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=4096
+CONFIG_FREERTOS_HZ=1000

@@ -1,0 +1,11 @@
+# Раскладка флеша 8 МБ: два слота приложения (под OTA), диск для хоста и coredump.
+# Диск (msc) стоит на том же месте, что раздел spiffs в Arduino-версии, поэтому
+# уже отформатированный FAT с файлами хоста не теряется.
+# Name,     Type, SubType,  Offset,   Size,     Flags
+nvs,        data, nvs,      0x9000,   0x5000,
+otadata,    data, ota,      0xe000,   0x2000,
+phy_init,   data, phy,      0x10000,  0x1000,
+app0,       app,  ota_0,    0x20000,  0x310000,
+app1,       app,  ota_1,    0x330000, 0x320000,
+msc,        data, spiffs,   0x670000, 0x180000,
+coredump,   data, coredump, 0x7F0000, 0x10000,

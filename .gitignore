@@ -3,6 +3,13 @@ firmware/build/
 __pycache__/
 *.pyc
 
+# IDF-проект: артефакты сборки и скачанные компоненты не держим в git
+idf/build/
+idf/managed_components/
+idf/sdkconfig
+idf/sdkconfig.old
+idf/dependencies.lock
+
 # инструменты: локальные бинарники (54 МБ), не в git
 tools/*.exe
 tools/*.msi
