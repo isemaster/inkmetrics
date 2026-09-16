@@ -109,6 +109,17 @@ mkdir -p /d/inkmetrics/build-diag
 9. **`pip` ломается из-за SOCKS-прокси** (`HTTPS_PROXY=socks5://…`, нет PySocks) — для pip
    прокси надо снимать (обёртка это делает).
 
+## Что лежит вне папки проекта (нужно для сборки)
+
+| Что | Где | Как восстановить |
+|---|---|---|
+| ESP-IDF v5.5.5 | `C:\esp\esp-idf` | `git clone --depth 1 -b v5.5.5 --recurse-submodules --shallow-submodules https://github.com/espressif/esp-idf.git` |
+| Обёртки запуска | `C:\esp\idf_run.py`, `C:\esp\idf_build.py` | 30 строк: снять `MSYSTEM` и SOCKS-прокси, добавить PATH тулчейнов, запустить `idf_tools.py`/`idf.py` (см. `tools/` в проекте — там же лежат копии логики загрузки тулчейнов) |
+| Тулчейны + питоновское окружение IDF | `C:\Users\user\.espressif` (~4 ГБ) | `python tools/idf_get_tools.py` (качает через VPS) → `idf_tools.py --tools-json C:/esp/dist/tools_local.json install --targets=esp32s3` → `install-python-env` |
+| Архивы тулчейнов | `C:\esp\dist` (1,2 ГБ) + `tools_local.json` | тот же скрипт |
+| Ключ к VPS (канал загрузки) | `D:\NewHerm\proxy_key`, хост `84.21.191.180` | — |
+| Примеры Waveshare (для экрана) | склонированы в `%TEMP%\eink\ws` | `git clone` репозитория Waveshare ESP32-S3-ePaper-1.54 |
+
 ## Что дальше по плану
 
 1. Добить USB-сеть (см. следующий шаг выше) и проверить с хоста: адаптер, адрес `192.168.7.x`,
