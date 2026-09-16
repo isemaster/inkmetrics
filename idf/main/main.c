@@ -41,6 +41,7 @@
 #include "diag.h"                   /* «чёрный ящик» логов (см. diag.c) */
 #include "usb_desc.h"               /* описатели USB: без них ECM/RNDIS не поднимается */
 #include "selfcheck.h"              /* самопроверка: уход в загрузчик без кнопки BOOT */
+#include "ui.h"                     /* экран прибора: панель, кнопки, SHTC3 (см. ui.c) */
 
 #define USB_NET_IP    "192.168.7.1"
 #define USB_NET_MASK  "255.255.255.0"
@@ -510,6 +511,7 @@ void app_main(void)
     diag_step("start_usb_net вернулся (link %s)", s_link_up ? "есть" : "нет");
     start_http();
     selfcheck_start(s_netif);   /* следим за хостом и уходим в загрузчик, если он молчит */
+    ui_init();                  /* панель, SHTC3 и кнопки: прибор начинает показывать состояние */
 
     ESP_LOGI(TAG, "готово: подключи кабель и открой http://" USB_NET_IP "/");
     diag_step("идём в главный цикл");
@@ -521,6 +523,7 @@ void app_main(void)
         tick++;
         ESP_LOGI(TAG, "работаю: heap %u, up %lld с", (unsigned)esp_get_free_heap_size(),
                  esp_timer_get_time() / 1000000);
+        ui_set_net_info(s_link_up, s_rx_frames, s_tx_frames);   /* экран видит состояние сети */
         if (tick % 2 == 0) {           /* раз в 10 с — строка в «чёрный ящик» */
             esp_netif_ip_info_t ip = {0};
             if (s_netif) {
