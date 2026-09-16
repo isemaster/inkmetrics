@@ -328,6 +328,23 @@ void selfcheck_http_hit(void)
     s_last_host_us = now_us();       /* хост дотянулся до нас — значит связь есть */
 }
 
+/* Хост назвал себя сам: браузер на его стороне открыл нашу страницу. В режиме моста
+   (docs/addressing.md, вариант A) это единственный надёжный способ узнать адрес ПК:
+   DHCP-обмена между нами и хостом больше нет, а ARP-подсказка ловит кого угодно. */
+void selfcheck_set_host(const char *ip)
+{
+    unsigned a = 0, b = 0, c = 0, d = 0;
+    if (!ip || sscanf(ip, "%u.%u.%u.%u", &a, &b, &c, &d) != 4) {
+        return;
+    }
+    uint32_t v = (a & 0xFFu) | ((b & 0xFFu) << 8) | ((c & 0xFFu) << 16) | ((d & 0xFFu) << 24);
+    if (v && v != s_host_ip) {
+        s_host_ip = v;
+        ESP_LOGI(TAG, "хост: %s (открыл нашу страницу)", ip);
+        diag_step("самопроверка: хост %s — по запросу к нашей странице", ip);
+    }
+}
+
 void selfcheck_status(selfcheck_status_t *out)
 {
     if (!out) {
@@ -365,6 +382,7 @@ void selfcheck_start(esp_netif_t *netif) { (void)netif; }
 void selfcheck_http_up(bool up) { (void)up; }
 void selfcheck_set_link(bool up) { (void)up; }
 void selfcheck_http_hit(void) {}
+void selfcheck_set_host(const char *ip) { (void)ip; }
 void selfcheck_host_frame(const uint8_t *frame, uint16_t len) { (void)frame; (void)len; }
 void selfcheck_enter_download_mode(const char *why) { (void)why; }
 void selfcheck_status(selfcheck_status_t *out)

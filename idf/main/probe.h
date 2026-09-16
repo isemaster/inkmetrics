@@ -11,8 +11,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#define PROBE_PORTS_LEN 48       /* буфер строки «22,80,135,445» */
 #define PROBE_PORTS 6
-
 typedef struct {
     uint16_t    port;
     const char *name;
@@ -28,6 +28,8 @@ typedef struct {
     char        http_server[32]; /* строка Server: из ответа (если есть) */
     uint32_t    checked_s;       /* когда была последняя проверка (секунды аптайма) */
     bool        host_known;
+    bool        checked;         /* хотя бы одна проверка выполнена */
+    char        ports[PROBE_PORTS_LEN];  /* ТОЛЬКО ОТКРЫТЫЕ порты через запятую: "22,80,445" */
 } probe_state_t;
 
 void probe_init(void);

@@ -42,6 +42,9 @@ void probe_set_host(const char *ip)
     if (a.s_addr != s_host_be) {
         s_host_be = a.s_addr;
         s_have_host = true;
+        s_st.checked = false;          /* для нового адреса данные ещё не собраны */
+        s_st.ports[0] = 0;
+        s_st.http_ok = false;
         ESP_LOGI(TAG, "цель проверок: %s", ip);
     }
 }
@@ -183,6 +186,19 @@ static void probe_task(void *arg)
             }
             s_st.checked_s = (uint32_t)(esp_timer_get_time() / 1000000);
             s_st.host_known = true;
+            /* строка для экрана: ТОЛЬКО открытые порты через запятую ("22,80,445") */
+            s_st.ports[0] = 0;
+            for (int i = 0; i < PROBE_PORTS; i++) {
+                if (s_st.svc[i].open) {
+                    size_t len = strlen(s_st.ports);
+                    if (len + 8 >= sizeof(s_st.ports)) {
+                        break;
+                    }
+                    snprintf(s_st.ports + len, sizeof(s_st.ports) - len, "%s%u",
+                             len ? "," : "", (unsigned)s_st.svc[i].port);
+                }
+            }
+            s_st.checked = true;
         }
         vTaskDelay(pdMS_TO_TICKS(PROBE_PERIOD_US / 1000));
     }

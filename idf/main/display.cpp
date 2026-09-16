@@ -22,11 +22,14 @@
 #define EPD_MOSI      13
 #define EPD_SCLK      12
 #define FB_LEN      5000     /* 200*200/8 — ровно как в Arduino-версии */
+#define DISP_FULL_EVERY 10   /* полное обновление каждое 10-е (стирает «чернила») */
 
 static const char *TAG = "display";
 static epaper_driver_display *s_drv;
 static uint8_t *s_fb;
 static bool s_ready;
+static bool s_have_base;     /* базовый образ панели (0x26) записан */
+static int  s_since_full;    /* сколько частичных обновлений после последнего полного */
 
 static void fb_px(int x, int y, bool black)
 {
@@ -176,8 +179,10 @@ esp_err_t display_init(void)
         return ESP_ERR_NO_MEM;
     }
     s_drv->EPD_Init();
-    s_drv->EPD_Clear();
-    s_drv->EPD_Display();
+    /* EPD_Clear() + полное обновление здесь убраны: именно они давали белое поле,
+       которое висело до первой перерисовки. Панель начнём рисовать первым же
+       кадром (ui_task), и это будет полное обновление с базовым образом. */
+    memset(s_fb, 0xFF, FB_LEN);       /* 1 = белый — в буфере, панель не трогаем */
     s_ready = true;
     ESP_LOGI(TAG, "панель поднята (%dx%d)", DISP_W, DISP_H);
     return ESP_OK;
@@ -196,10 +201,37 @@ void display_clear(void)
     memset(s_fb, 0xFF, FB_LEN);       /* 1 = белый */
 }
 
-void display_show(void)
+/* Полное обновление: кадр уходит и в «текущий» (0x24), и в «базовый» (0x26) образ
+   панели — именно с ним сравнивает контроллер при частичном обновлении. Волновая
+   форма при этом полная, отсюда инверсия и вспышки. */
+static void refresh_full(void)
 {
-    if (s_ready) {
-        s_drv->EPD_Display();
+    s_drv->EPD_DisplayPartBaseImage();
+    s_drv->EPD_Init_Partial();        /* дальше — быстрая частичная форма */
+    s_have_base = true;
+    s_since_full = 0;
+}
+
+void display_show(bool force_full)
+{
+    if (!s_ready || !s_drv) {
+        return;
+    }
+    if (force_full || !s_have_base || s_since_full >= DISP_FULL_EVERY) {
+        refresh_full();
+        return;
+    }
+    s_drv->EPD_DisplayPart();         /* частичное: без инверсии и вспышек */
+    s_since_full++;
+}
+
+void display_invert(void)
+{
+    if (!s_fb) {
+        return;
+    }
+    for (int i = 0; i < FB_LEN; i++) {
+        s_fb[i] = (uint8_t)~s_fb[i];
     }
 }
 

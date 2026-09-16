@@ -1,11 +1,16 @@
 /*
- * Содержимое экрана прибора — 4 страницы, язык английский (переключатель языка
- * сделаем позже, в экране настроек; см. MEMORY.md §14).
+ * Содержимое экрана прибора — ТРИ страницы, только крупным шрифтом 12x22.
  *
- *   0 STATUS   — состояние, адрес для входа, время хоста, климат, ping
- *   1 NETWORK  — канал: кадры/байты в секунду, DHCP, HTTP, разрывы USB
- *   2 SERVICES — что открыто на хосте (TCP-пробы) и ответ его веб-сервера
- *   3 PING     — задержки (last/min/avg/max), потери и график за 3 минуты
+ * Сетка, из которой всё считается: 200 / 12 = 16 знаков в строке,
+ * 200 / 22 = 9 строк. Мелкого шрифта на страницах нет (требование пользователя
+ * 16.09: «шрифт как надпись ONLINE, меньше не надо»).
+ *
+ * Строчных букв в крупном шрифте нет, поэтому весь текст перед выводом
+ * приводится к верхнему регистру (см. upper_utf8() в screen.c).
+ *
+ *   0 DEVICE — состояние прибора: статус, время, датчик, пинг в интернет, адрес
+ *   1 PING   — пинг во внешнюю сеть: последние ответы столбиком, потери, min/max
+ *   2 HOST   — что видно о хосте: имя, адрес, ОТКРЫТЫЕ порты одной строкой, веб-ответ
  */
 #ifndef SCREEN_H
 #define SCREEN_H
@@ -13,59 +18,48 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define SCREEN_PAGES   4
-#define SCREEN_NEVER   0xFFFFFFFFu
-#define SCREEN_SVCS    6
-#define SCREEN_RTT_LEN 60
+#define SCREEN_PAGES      3
+#define SCREEN_NEVER      0xFFFFFFFFu
+#define SCREEN_PING_LINES 6      /* сколько последних ответов показываем столбиком */
+#define SCREEN_PORTS_LEN  48     /* буфер строки с открытыми портами */
 
 typedef struct {
-    /* состояние прибора */
-    const char *fw;
-    bool        online;          /* хост подавал признаки за последнюю минуту */
-    bool        link_up;         /* USB-стек видит хоста */
-    const char *dev_ip;          /* адрес, который открывать в браузере */
-    uint32_t    up_s;
+    /* прибор и сеть */
+    const char *dev_ip;          /* адрес прибора (что открывать в браузере) */
+    const char *net_mode;        /* "FROM ROUTER" / "EMERGENCY" / "NO ADDR" */
+    const char *gateway;         /* шлюз, если известен */
+    bool        net_router;      /* адрес получен от роутера (а не аварийный) */
+    uint32_t    up_s;            /* аптайм прибора, с */
 
-    /* что знаем о хосте (пункты 1–6) */
-    const char *host_ip;
-    bool        host_known;
-    const char *host_name;       /* DHCP опция 12 */
+    /* время */
     bool        time_valid;
-    const char *time_str;        /* ЧЧ:ММ:СС по времени хоста */
-    const char *date_str;
-    const char *time_src;        /* SNTP / host / - */
+    const char *time_str;        /* ЧЧ:ММ:СС */
+    const char *date_str;        /* ДД.ММ.ГГГГ */
 
-    /* самопроверка */
-    uint32_t    silence_s;
-    uint32_t    fallback_left_s; /* SCREEN_NEVER — автопереход выключен */
-    uint32_t    http_hits;
-    uint32_t    frames;
-    uint32_t    dhcp_pkts;
-
-    /* ping */
-    uint32_t    ping_ok, ping_fail, loss_pct;
-    uint32_t    rtt_last, rtt_min, rtt_avg, rtt_max;
-    uint16_t    rtt_hist[SCREEN_RTT_LEN];
-    int         rtt_hist_len;
-
-    /* канал */
-    uint32_t    rx_rate, tx_rate;    /* кадров в секунду */
-    uint32_t    rx_kbs, tx_kbs;      /* килобайт в секунду */
-    uint32_t    reconnects;
-
-    /* сервисы хоста */
-    const char *svc_name[SCREEN_SVCS];
-    uint16_t    svc_port[SCREEN_SVCS];
-    bool        svc_open[SCREEN_SVCS];
-    bool        http_ok;
-    int         http_code;
-    uint32_t    http_ms;
-    const char *http_server;
-
-    /* климат */
+    /* датчик на плате */
     bool        sensor_ok;
     float       t_c;
     float       rh;
+
+    /* пинг в интернет */
+    const char *ping_target;                       /* имя цели, например YA.RU */
+    bool        ping_ok;                           /* хоть один ответ был */
+    uint32_t    ping_last[SCREEN_PING_LINES];      /* последние замеры, старые → новые */
+    int         ping_count;                        /* сколько записей заполнено */
+    uint32_t    ping_loss_pct, ping_avg, ping_min, ping_max;
+
+    /* хост */
+    bool        host_known;
+    const char *host_name;
+    const char *host_ip;
+    bool        ports_known;                       /* проверка портов выполнялась */
+    char        ports[SCREEN_PORTS_LEN];           /* только открытые: "22,80,445" */
+    bool        web_ok;
+    int         web_code;
+    uint32_t    web_ms;
+
+    /* аварийное состояние: инверсный вид + полное обновление */
+    bool        emergency;
 } screen_state_t;
 
 void screen_show(const screen_state_t *st, int page);

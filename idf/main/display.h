@@ -20,12 +20,21 @@
 extern "C" {
 #endif
 
-/* Поднять питание панели, SPI и сам драйвер, залить пустой кадр. */
+/* Поднять питание панели, SPI и сам драйвер. Кадр не заливается: панель остаётся
+   в том состоянии, в каком была, первый кадр рисует задача экрана сразу (без
+   белого поля, которое раньше висело 10–15 с). */
 esp_err_t display_init(void);
 bool      display_ready(void);
 
 void display_clear(void);
-void display_show(void);                                  /* вывести кадр на панель */
+/* Вывести кадр на панель.
+     force_full = false — частичное обновление (быстро, без мигания и инверсии);
+     force_full = true  — полное (с инверсией, ~1,4 с): аварийный вид экрана.
+   Полное обновление само включается каждое DISP_FULL_EVERY-е обновление, чтобы
+   стирать «чернила»/призраки от частичных. */
+void display_show(bool force_full);
+/* Инвертировать весь кадровый буфер (белое↔чёрное) — аварийный вид. */
+void display_invert(void);
 void display_px(int x, int y, bool black);
 void display_hline(int x, int y, int len, bool black);
 void display_rect(int x, int y, int w, int h, bool filled, bool black);

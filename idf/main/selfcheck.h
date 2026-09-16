@@ -72,6 +72,9 @@ void selfcheck_ping_stats(selfcheck_ping_stat_t *out);
 int  selfcheck_rtt_history(uint16_t *dst, int max);
 /* Имя хоста из DHCP-опции 12 (как хост себя называет); "" — ещё не видели. */
 const char *selfcheck_host_name(void);
+/* Хост сам назвал себя: адрес взят из запроса к нашей странице (браузер на хосте).
+   Нужно в режиме моста, когда DHCP-обмена с хостом нет и ARP-подсказки не хватает. */
+void selfcheck_set_host(const char *ip);
 void selfcheck_enter_download_mode(const char *why);
 
 #endif /* SELFCHECK_H */

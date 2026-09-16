@@ -1,6 +1,10 @@
 /*
- * Отрисовка экранов прибора (200x200, английский текст) — четыре страницы:
- * статус, сеть, сервисы хоста, задержки с графиком.
+ * Отрисовка экранов прибора (200x200) — три страницы, ТОЛЬКО крупный шрифт 12x22.
+ *
+ * Сетка: 16 знаков в строке, 9 строк (y = 0, 22, 44, … 176).
+ * Строчных букв в крупном шрифте нет → текст приводим к верхнему регистру.
+ * Аварийное состояние (нет адреса/нет хоста) рисуется инверсией и полным
+ * обновлением: мигание и инверсия — признак аварии, а не штатной работы.
  */
 #include "screen.h"
 
@@ -10,183 +14,171 @@
 
 #include "display.h"
 
-static void text_fmt(int x, int y, const char *fmt, ...)
+#define LINE_H  22                       /* высота строки крупного шрифта */
+#define ADV     display_text_big_advance()
+
+/* ------------------------------------------------------------------ утилиты */
+
+/* Привести строку к верхнему регистру: в крупном шрифте строчных букв нет.
+   Латиница (ASCII) и кириллица а-я / ё. */
+static void upper_utf8(char *s)
+{
+    unsigned char *p = (unsigned char *)s;
+    while (*p) {
+        if (p[0] < 0x80) {
+            if (p[0] >= 'a' && p[0] <= 'z') {
+                p[0] = (unsigned char)(p[0] - 0x20);
+            }
+            p++;
+        } else if ((p[0] & 0xE0) == 0xC0) {
+            p += 2;
+        } else if ((p[0] & 0xF0) == 0xE0 && p[1] && p[2]) {
+            uint16_t cp = (uint16_t)(((p[0] & 0x0F) << 12) | ((p[1] & 0x3F) << 6) | (p[2] & 0x3F));
+            if (cp >= 0x430 && cp <= 0x44F) {
+                cp = (uint16_t)(cp - 0x20);           /* а-я → А-Я */
+            } else if (cp == 0x451) {
+                cp = 0x401;                           /* ё → Ё */
+            }
+            p[0] = (uint8_t)(0xE0 | (cp >> 12));
+            p[1] = (uint8_t)(0x80 | ((cp >> 6) & 0x3F));
+            p[2] = (uint8_t)(0x80 | (cp & 0x3F));
+            p += 3;
+        } else {
+            p++;
+        }
+    }
+}
+
+/* Одна строка крупным шрифтом: printf-формат → верхний регистр → вывод. */
+static void line(int y, const char *fmt, ...)
 {
     char buf[64];
     va_list ap;
     va_start(ap, fmt);
     vsnprintf(buf, sizeof(buf), fmt, ap);
     va_end(ap);
-    display_text(x, y, buf);
+    upper_utf8(buf);
+    display_text_big(1, y, buf);
 }
 
-static void header(const char *title, const char *fw)
+/* Готовая строка (уже сформированная) крупным шрифтом с заданным отступом. */
+static void line_at(int x, int y, const char *text)
 {
-    display_text(3, 3, title);
-    if (fw && fw[0]) {
-        int w = display_utf8_len(fw) * display_text_advance();
-        display_text(DISP_W - 3 - w, 3, fw);
+    char buf[64];
+    snprintf(buf, sizeof(buf), "%s", text);
+    upper_utf8(buf);
+    display_text_big(x, y, buf);
+}
+
+/* Заголовок страницы: название слева, номер страницы справа. */
+static void header(const char *title, int page)
+{
+    char num[20];
+    snprintf(num, sizeof(num), "%d/%d", page + 1, (int)SCREEN_PAGES);
+    display_text_big(1, 0, title);
+    display_text_big(DISP_W - (int)(strlen(num) * ADV) - 1, 0, num);
+}
+
+/* --------------------------------------------------------- страница 0: прибор */
+static void show_device(const screen_state_t *st)
+{
+    header("DEVICE", 0);
+
+    const char *big = "CHECKING";
+    if (st->emergency) {
+        big = "NO NET";                       /* аварийный вид: инверсия + полное обновление */
+    } else if (st->net_router) {
+        big = "ONLINE";
     }
-    display_hline(0, 16, DISP_W, true);
-}
+    display_rect(0, 20, DISP_W, 26, false, true);
+    int w = (int)(strlen(big) * ADV);
+    display_text_big((DISP_W - w) / 2, 22, big);
 
-static void footer(int page)
-{
-    char buf[32];
-    snprintf(buf, sizeof(buf), "PWR: page %d/%d", page, SCREEN_PAGES);
-    display_text(3, DISP_H - 13, buf);
-}
-
-/* --------------------------------------------------------------- экран 0: статус */
-static void show_status(const screen_state_t *st)
-{
-    header("inkmetrics", st->fw);
-
-    const char *big = st->online ? "ONLINE" : "NO DATA";
-    int big_w = display_utf8_len(big) * display_text_big_advance();
-    display_text_big((DISP_W - big_w) / 2, 24, big);
-    display_rect(6, 20, DISP_W - 12, 34, false, true);
-
-    text_fmt(3, 60, "OPEN  %s", st->dev_ip ? st->dev_ip : "-");
-    if (st->host_known && st->host_name && st->host_name[0]) {
-        text_fmt(3, 72, "HOST  %s", st->host_name);
-    } else if (st->host_known) {
-        text_fmt(3, 72, "HOST  %s", st->host_ip);
-    } else {
-        display_text(3, 72, "HOST  not seen");
-    }
-    text_fmt(3, 84, "UP    %u s", (unsigned)st->up_s);
     if (st->time_valid) {
-        text_fmt(3, 96, "TIME  %s %s", st->time_str, st->time_src);
+        line(44, "TIME %s", st->time_str);
+        line(66, "DATE %s", st->date_str);
     } else {
-        display_text(3, 96, "TIME  waiting host");
+        line(44, "TIME WAITING");
+        line(66, "DATE --");
     }
+
     if (st->sensor_ok) {
-        text_fmt(3, 108, "TEMP  %.1f C   RH %.0f %%", (double)st->t_c, (double)st->rh);
+        line(88, "TEMP %.1fC RH %.0f%%", (double)st->t_c, (double)st->rh);
     } else {
-        display_text(3, 108, "TEMP  n/a");
+        line(88, "TEMP N/A");
     }
-    text_fmt(3, 120, "PING  %u ok / %u lost", (unsigned)st->ping_ok, (unsigned)st->ping_fail);
-    if (st->fallback_left_s == SCREEN_NEVER) {
-        display_text(3, 132, "AUTOFLASH off");
+
+    if (st->ping_ok && st->ping_count > 0) {
+        line(110, "NET %u MS %s", (unsigned)st->ping_last[st->ping_count - 1],
+             st->ping_target ? st->ping_target : "");
     } else {
-        text_fmt(3, 132, "AUTOFLASH in %u s", (unsigned)st->fallback_left_s);
+        line(110, "NET NO ANSWER");
     }
-    display_hline(0, 146, DISP_W, true);
-    if (st->link_up) {
-        text_fmt(3, 152, "usb link up   %s", st->http_hits ? "web seen" : "no web yet");
-    } else {
-        display_text(3, 152, "usb link down");
-    }
-    display_text(3, 164, st->date_str && st->time_valid ? st->date_str : "--");
-    footer(0);
+
+    line(132, "ADDR %s", st->dev_ip ? st->dev_ip : "-");
+    line(154, "NET %s", st->net_mode ? st->net_mode : "-");
+    line(176, "UP %uD %02u:%02u", (unsigned)(st->up_s / 86400u),
+         (unsigned)((st->up_s % 86400u) / 3600u), (unsigned)((st->up_s % 3600u) / 60u));
 }
 
-/* ---------------------------------------------------------------- экран 1: сеть */
-static void show_network(const screen_state_t *st)
-{
-    header("NETWORK", st->fw);
-
-    text_fmt(3, 22, "LINK   %s (lost %u)", st->link_up ? "up" : "down",
-             (unsigned)st->reconnects);
-    if (st->host_known) {
-        if (st->host_name && st->host_name[0]) {
-            text_fmt(3, 36, "HOST   %s", st->host_name);
-            text_fmt(3, 50, "IP     %s", st->host_ip);
-        } else {
-            text_fmt(3, 36, "HOST   %s", st->host_ip);
-        }
-    } else {
-        display_text(3, 36, "HOST   not seen");
-    }
-    text_fmt(3, 64, "RX     %u frm  %u/s  %u KB/s",
-             (unsigned)st->frames, (unsigned)st->rx_rate, (unsigned)st->rx_kbs);
-    text_fmt(3, 78, "TX     %u frm  %u/s  %u KB/s",
-             0u, (unsigned)st->tx_rate, (unsigned)st->tx_kbs);
-    text_fmt(3, 92, "DHCP   %u pkts", (unsigned)st->dhcp_pkts);
-    text_fmt(3, 106, "HTTP   %u requests", (unsigned)st->http_hits);
-    text_fmt(3, 120, "SILENT %u s", (unsigned)st->silence_s);
-    display_hline(0, 136, DISP_W, true);
-    display_text(3, 142, "watchdog: autoflash");
-    if (st->fallback_left_s == SCREEN_NEVER) {
-        display_text(3, 154, "state off");
-    } else {
-        text_fmt(3, 154, "in %u s of silence", (unsigned)st->fallback_left_s);
-    }
-    footer(1);
-}
-
-/* ------------------------------------------------------------ экран 2: сервисы */
-static void show_services(const screen_state_t *st)
-{
-    header("SERVICES", st->fw);
-
-    for (int i = 0; i < SCREEN_SVCS; i++) {
-        int y = 22 + i * 13;
-        const char *name = st->svc_name[i] ? st->svc_name[i] : "?";
-        text_fmt(3, y, "%-5s %-5u %s", name, (unsigned)st->svc_port[i],
-                 st->svc_open[i] ? "open" : "-");
-    }
-    display_hline(0, 104, DISP_W, true);
-    if (st->http_ok) {
-        text_fmt(3, 110, "WEB reply %d in %u ms", st->http_code, (unsigned)st->http_ms);
-        if (st->http_server && st->http_server[0]) {
-            text_fmt(3, 122, "server %s", st->http_server);
-        } else {
-            display_text(3, 122, "server unknown");
-        }
-    } else {
-        display_text(3, 110, "no HTTP answer from host");
-        display_text(3, 122, "(port 80 closed or filtered)");
-    }
-    display_hline(0, 136, DISP_W, true);
-    display_text(3, 142, "TCP probes, ok = connect");
-    display_text(3, 154, "timeout 400 ms each");
-    footer(2);
-}
-
-/* ------------------------------------------------------------- экран 3: задержки */
+/* ----------------------------------------------------------- страница 1: пинг */
 static void show_ping(const screen_state_t *st)
 {
-    header("PING", st->fw);
+    char title[24];
+    snprintf(title, sizeof(title), "PING %s", st->ping_target ? st->ping_target : "");
+    header(title, 1);
 
-    text_fmt(3, 22, "last   %u ms", (unsigned)st->rtt_last);
-    text_fmt(3, 34, "min    %u ms", (unsigned)st->rtt_min);
-    text_fmt(3, 46, "avg    %u ms", (unsigned)st->rtt_avg);
-    text_fmt(3, 58, "max    %u ms", (unsigned)st->rtt_max);
-    text_fmt(3, 70, "loss   %u %%  (%u ok / %u lost)",
-             (unsigned)st->loss_pct, (unsigned)st->ping_ok, (unsigned)st->ping_fail);
-
-    /* график: столбик на каждый замер, масштаб по максимуму (не меньше 10 мс) */
-    const int gx = 3, gy = 88, gw = DISP_W - 6, gh = 60;
-    display_rect(gx - 1, gy - 1, gw + 2, gh + 2, false, true);
-    uint32_t scale = st->rtt_max > 10 ? st->rtt_max : 10;
-    int n = st->rtt_hist_len;
-    if (n > 0) {
-        int step = gw / (n > gw ? gw : n);
-        if (step < 1) {
-            step = 1;
+    /* последние ответы столбиком — как в консоли ping */
+    for (int i = 0; i < SCREEN_PING_LINES; i++) {
+        int y = LINE_H + i * LINE_H;                   /* 22 … 132 */
+        if (i < st->ping_count) {
+            line(y, "%u MS", (unsigned)st->ping_last[i]);
+        } else {
+            line(y, "--");
         }
-        for (int i = 0; i < n; i++) {
-            uint32_t v = st->rtt_hist[i];
-            int h = (int)((v * (uint32_t)gh) / scale);
-            if (h > gh) {
-                h = gh;
-            }
-            int x = gx + i * step;
-            if (h > 0) {
-                for (int j = 0; j < h; j++) {
-                    display_px(x, gy + gh - 1 - j, true);
-                }
-            } else {
-                display_px(x, gy + gh - 1, true);      /* потеря — отметка на нуле */
-            }
-        }
-    } else {
-        display_text(gx + 4, gy + gh / 2, "no replies yet");
     }
-    text_fmt(3, 154, "scale 0..%u ms", (unsigned)scale);
-    footer(3);
+
+    line(154, "LOSS %u%% AVG %u MS", (unsigned)st->ping_loss_pct, (unsigned)st->ping_avg);
+    line(176, "MIN %u MAX %u MS", (unsigned)st->ping_min, (unsigned)st->ping_max);
+}
+
+/* ----------------------------------------------------------- страница 2: хост */
+static void show_host(const screen_state_t *st)
+{
+    header("HOST", 2);
+
+    if (st->host_known) {
+        line(22, "%s", st->host_name && st->host_name[0] ? st->host_name : st->host_ip);
+        line(44, "IP %s", st->host_ip ? st->host_ip : "-");
+    } else {
+        line(22, "HOST NOT SEEN");
+        line(44, "IP --");
+    }
+
+    /* порты: только открытые, через запятую, максимум двумя строками */
+    if (st->ports_known && st->ports[0]) {
+        char buf[SCREEN_PORTS_LEN + 8];
+        char first[20];
+        snprintf(buf, sizeof(buf), "PORTS %s", st->ports);
+        snprintf(first, sizeof(first), "%.16s", buf);
+        line_at(1, 66, first);
+        if (strlen(buf) > 16) {
+            line_at(1, 88, buf + 16);
+        }
+    } else if (st->ports_known) {
+        line(66, "NO OPEN PORTS");
+    } else {
+        line(66, "PORTS CHECKING");
+    }
+
+    if (st->web_ok) {
+        line(110, "WEB %d %u MS", st->web_code, (unsigned)st->web_ms);
+    } else {
+        line(110, "WEB NO ANSWER");
+    }
+
+    line(132, "GW %s", st->gateway ? st->gateway : "-");
+    line(176, "HOST SEEN BY WEB");
 }
 
 void screen_show(const screen_state_t *st, int page)
@@ -194,17 +186,17 @@ void screen_show(const screen_state_t *st, int page)
     display_clear();
     switch (page) {
     case 1:
-        show_network(st);
-        break;
-    case 2:
-        show_services(st);
-        break;
-    case 3:
         show_ping(st);
         break;
+    case 2:
+        show_host(st);
+        break;
     default:
-        show_status(st);
+        show_device(st);
         break;
     }
-    display_show();
+    if (st->emergency) {
+        display_invert();          /* авария: инверсный вид + полное обновление */
+    }
+    display_show(st->emergency);
 }

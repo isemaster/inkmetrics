@@ -44,17 +44,57 @@
 #include "ui.h"                     /* экран прибора: панель, кнопки, SHTC3 (см. ui.c) */
 #include "timesync.h"               /* время с хоста: SNTP + подсказка от браузера */
 #include "probe.h"                  /* проверка сервисов хоста по сети */
+#include "ping_inet.h"              /* пинг во внешнюю сеть — то, что на экране */
+#include "netinfo.h"                /* режим адресации: от роутера или аварийный */
+#include "lwip/inet.h"
+#include "lwip/sockets.h"
 
-#define USB_NET_IP    "192.168.7.1"
+#define USB_NET_IP    "192.168.7.1"  /* АВАРИЙНЫЙ адрес прибора (см. net_addr_task) */
 #define USB_NET_MASK  "255.255.255.0"
 #define USB_NET_GW    "192.168.7.1"
 #define USB_NET_MTU   1514           /* кадр без FCS: 14 (Ethernet) + 1500 (MTU) */
+#define NET_DHCP_TIMEOUT_MS 15000    /* сколько ждём адрес от роутера локальной сети */
+#define PING_TARGET_NAME "ya.ru"     /* цель пинга во внешнюю сеть (показывается на экране) */
+#define PING_TARGET_IP   "77.88.55.242"   /* запасной адрес, если DNS не отвечает */
 #define BOOT_GPIO     0
-#define FW_VERSION    "0.3.0-idf"
+#define FW_VERSION    "0.3.1-idf"
 
 static const char *TAG = "eink";
 static esp_netif_t *s_netif = NULL;
 static volatile bool s_link_up = false;
+
+/* ------------------------------------------------- режим адресации (netinfo.h) */
+/* Адрес прибор получает сам: сначала просит у роутера локальной сети (обычный
+   DHCP-клиент, запросы уходят через мост Windows на ПК), а если адреса нет за
+   NET_DHCP_TIMEOUT_MS — берёт аварийный 192.168.7.1 и выдаёт адрес хосту сам. */
+static volatile net_mode_t s_net_mode = NET_MODE_NONE;
+static char s_ip_str[16] = "";
+static char s_gw_str[16] = "";
+
+net_mode_t net_mode(void) { return s_net_mode; }
+
+bool net_from_router(void) { return s_net_mode == NET_MODE_ROUTER; }
+
+const char *net_mode_text(void)
+{
+    switch (s_net_mode) {
+    case NET_MODE_ROUTER:    return "FROM ROUTER";
+    case NET_MODE_EMERGENCY: return "EMERGENCY";
+    default:                 return "NO ADDR";
+    }
+}
+
+const char *net_ip_str(void) { return s_ip_str[0] ? s_ip_str : USB_NET_IP; }
+const char *net_gw_str(void)  { return s_gw_str[0] ? s_gw_str : "-"; }
+
+static void net_info_refresh(void)
+{
+    esp_netif_ip_info_t ip = {0};
+    if (s_netif && esp_netif_get_ip_info(s_netif, &ip) == ESP_OK) {
+        snprintf(s_ip_str, sizeof(s_ip_str), IPSTR, IP2STR(&ip.ip));
+        snprintf(s_gw_str, sizeof(s_gw_str), IPSTR, IP2STR(&ip.gw));
+    }
+}
 
 /* ------------------------------------------------------------------ аварийный выход */
 static void boot_escape_check(void)
@@ -242,9 +282,36 @@ static const char INDEX_HTML[] =
     "'<tr><td>нет связи с прибором</td><td>'+e+'</td></tr>';}}"
     "hostTime();up();setInterval(up,2000);setInterval(hostTime,60000);</script></body></html>";
 
+/* Кто к нам пришёл — это и есть «хост». В режиме моста (прибор в локальной сети)
+   узнать адрес ПК иначе нельзя: DHCP-обмена с ним больше нет, а ARP-подсказка
+   ловит любой узел. Браузер на хосте открыл нашу страницу — вот его адрес. */
+static void note_host_from_request(httpd_req_t *req)
+{
+    int fd = httpd_req_to_sockfd(req);
+    if (fd < 0) {
+        return;
+    }
+    struct sockaddr_in sa;
+    socklen_t len = sizeof(sa);
+    if (getpeername(fd, (struct sockaddr *)&sa, &len) != 0) {
+        return;
+    }
+    uint32_t a = ntohl(sa.sin_addr.s_addr);
+    char ip[16];
+    snprintf(ip, sizeof(ip), "%u.%u.%u.%u", (unsigned)((a >> 24) & 0xFF),
+             (unsigned)((a >> 16) & 0xFF), (unsigned)((a >> 8) & 0xFF), (unsigned)(a & 0xFF));
+    if (strcmp(ip, net_ip_str()) == 0 || strncmp(ip, "127.", 4) == 0) {
+        return;                       /* это мы сами, не хост */
+    }
+    selfcheck_set_host(ip);
+    probe_set_host(ip);
+    timesync_set_host(ip);
+}
+
 static esp_err_t index_get(httpd_req_t *req)
 {
     selfcheck_http_hit();
+    note_host_from_request(req);
     httpd_resp_set_type(req, "text/html; charset=utf-8");
     return httpd_resp_send(req, INDEX_HTML, HTTPD_RESP_USE_STRLEN);
 }
@@ -264,6 +331,7 @@ static esp_err_t boot_get(httpd_req_t *req)
 static esp_err_t state_get(httpd_req_t *req)
 {
     selfcheck_http_hit();          /* хост дотянулся до нас — это признак жизни */
+    note_host_from_request(req);
     char json[1024];
     char svc[128] = "";
     esp_netif_ip_info_t ip = {0};
@@ -445,20 +513,61 @@ static void enable_verbose_tags(void)
     diag_step("включены подробные логи сети (esp_netif/dhcps/tusb_net)");
 }
 
+/* Адрес прибора: сначала просим у роутера локальной сети (DHCP-клиент), если за
+   NET_DHCP_TIMEOUT_MS адреса нет — аварийный режим: свой адрес 192.168.7.1 и
+   DHCP-сервер для хоста, чтобы прибор остался доступным (см. docs/addressing.md). */
+static void net_addr_task(void *arg)
+{
+    (void)arg;
+
+    for (int i = 0; i < NET_DHCP_TIMEOUT_MS / 500; i++) {
+        vTaskDelay(pdMS_TO_TICKS(500));
+        esp_netif_ip_info_t ip = {0};
+        if (!s_netif) {
+            continue;
+        }
+        if (esp_netif_get_ip_info(s_netif, &ip) == ESP_OK && ip.ip.addr != 0) {
+            s_net_mode = NET_MODE_ROUTER;
+            net_info_refresh();
+            ESP_LOGI(TAG, "адрес от роутера локальной сети: " IPSTR " (шлюз " IPSTR ")",
+                     IP2STR(&ip.ip), IP2STR(&ip.gw));
+            diag_step("адрес от роутера: " IPSTR ", шлюз " IPSTR, IP2STR(&ip.ip), IP2STR(&ip.gw));
+            ping_inet_enable(true);          /* есть маршрут — можно пинговать интернет */
+            vTaskDelete(NULL);
+            return;
+        }
+    }
+
+    ESP_LOGW(TAG, "адрес от роутера не получен за %d с — аварийный режим", NET_DHCP_TIMEOUT_MS / 1000);
+    diag_step("DHCP-адрес не получен за %d с → аварийный режим", NET_DHCP_TIMEOUT_MS / 1000);
+    esp_netif_dhcpc_stop(s_netif);
+    esp_netif_ip_info_t st = {0};
+    esp_netif_str_to_ip4(USB_NET_IP, &st.ip);
+    esp_netif_str_to_ip4(USB_NET_GW, &st.gw);
+    esp_netif_str_to_ip4(USB_NET_MASK, &st.netmask);
+    esp_netif_set_ip_info(s_netif, &st);
+    esp_err_t err = esp_netif_dhcps_start(s_netif);
+    s_net_mode = NET_MODE_EMERGENCY;
+    net_info_refresh();
+    ESP_LOGW(TAG, "аварийный режим: прибор " USB_NET_IP ", DHCP-сервер для хоста (%s)",
+             esp_err_to_name(err));
+    diag_step("аварийный режим: " USB_NET_IP " + DHCP-сервер — %s", esp_err_to_name(err));
+    ping_inet_enable(false);                 /* маршрута в сеть нет */
+    vTaskDelete(NULL);
+}
+
 static void start_usb_net(void)
 {
     esp_netif_inherent_config_t base = ESP_NETIF_INHERENT_DEFAULT_ETH();
-    base.flags = (esp_netif_flags_t)(ESP_NETIF_DHCP_SERVER | ESP_NETIF_FLAG_AUTOUP);
+    /* Прибор — DHCP-КЛИЕНТ: адрес, шлюз и DNS выдаёт роутер локальной сети
+       (запросы уходят через мост Windows на ПК). Аварийный статический адрес
+       включается в net_addr_task, если адреса нет. */
+    base.flags = ESP_NETIF_FLAG_AUTOUP;
     base.if_key = "USB_DEF";
     base.if_desc = "usb";
     base.route_prio = 90;
     base.get_ip_event = 0;
     base.lost_ip_event = 0;
-    static esp_netif_ip_info_t s_ip_info;          /* должен жить, пока жив netif */
-    esp_netif_str_to_ip4(USB_NET_IP, &s_ip_info.ip);
-    esp_netif_str_to_ip4(USB_NET_GW, &s_ip_info.gw);
-    esp_netif_str_to_ip4(USB_NET_MASK, &s_ip_info.netmask);
-    base.ip_info = &s_ip_info;
 
     esp_netif_config_t cfg = {
         .base = &base,
@@ -483,17 +592,14 @@ static void start_usb_net(void)
     esp_netif_action_start(s_netif, NULL, 0, NULL);
     esp_netif_action_connected(s_netif, NULL, 0, NULL);
 
-    /* хост получит адрес от прибора (сам прибор — 192.168.7.1).
-       ALREADY_STARTED — не ошибка: сервер уже поднят автоматически, потому что флаг
-       ESP_NETIF_DHCP_SERVER задан в inherent-конфиге netif. */
-    esp_err_t err = esp_netif_dhcps_start(s_netif);
-    bool dhcps_ok = (err == ESP_OK) || (err == ESP_ERR_ESP_NETIF_DHCP_ALREADY_STARTED);
-    ESP_LOGI(TAG, "DHCP-сервер: %s", dhcps_ok ? "поднят" : esp_err_to_name(err));
-    if (!dhcps_ok) {
-        diag_step("DHCP-сервер → %s", esp_err_to_name(err));
-    } else {
-        diag_step("DHCP-сервер поднят (%s)", esp_err_to_name(err));
-    }
+    /* Просим адрес у роутера локальной сети. Если адреса не дадут (нет моста, ПК
+       стоит отдельно) — net_addr_task через NET_DHCP_TIMEOUT_MS переведёт прибор
+       в аварийный режим: свой адрес 192.168.7.1 + DHCP-сервер для хоста. */
+    esp_err_t err = esp_netif_dhcpc_start(s_netif);
+    bool dhcpc_ok = (err == ESP_OK) || (err == ESP_ERR_ESP_NETIF_DHCP_ALREADY_STARTED);
+    ESP_LOGI(TAG, "DHCP-клиент: %s", dhcpc_ok ? "запущен" : esp_err_to_name(err));
+    diag_step("DHCP-клиент %s", dhcpc_ok ? "запущен" : esp_err_to_name(err));
+    xTaskCreate(net_addr_task, "netaddr", 4096, NULL, 5, NULL);
 
 #if CONFIG_TINYUSB_NET_MODE_NONE
     ESP_LOGW(TAG, "диагностический режим: USB-сеть выключена, логи в USB Serial/JTAG");
@@ -533,7 +639,7 @@ static void start_usb_net(void)
     }
     diag_step("TinyUSB поднят");
     s_link_up = true;
-    ESP_LOGI(TAG, "USB-сеть поднята (MAC %02x:%02x:%02x:%02x:%02x:%02x), прибор на " USB_NET_IP,
+    ESP_LOGI(TAG, "USB-сеть поднята (MAC %02x:%02x:%02x:%02x:%02x:%02x): прошу адрес у роутера",
              tud_network_mac_address[0], tud_network_mac_address[1], tud_network_mac_address[2],
              tud_network_mac_address[3], tud_network_mac_address[4], tud_network_mac_address[5]);
 #endif
@@ -583,9 +689,10 @@ void app_main(void)
     diag_step("start_usb_net вернулся (link %s)", s_link_up ? "есть" : "нет");
     start_http();
     selfcheck_start(s_netif);   /* следим за хостом и уходим в загрузчик, если он молчит */
+    ping_inet_init(PING_TARGET_NAME, PING_TARGET_IP);   /* пинг во внешнюю сеть (для экрана) */
     ui_init();                  /* панель, SHTC3 и кнопки: прибор начинает показывать состояние */
 
-    ESP_LOGI(TAG, "готово: подключи кабель и открой http://" USB_NET_IP "/");
+    ESP_LOGI(TAG, "готово: страница прибора откроется по адресу, который выдал роутер");
     diag_step("идём в главный цикл");
 
     /* дальше — экран, кнопки, SHTC3, метрики хоста (перенос из Arduino-версии) */
