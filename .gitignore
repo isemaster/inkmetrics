@@ -21,6 +21,10 @@ tools/*.msi
 # дампы прошивок (8 МБ каждый)
 firmware/backup/
 
+# локальные дампы «чёрного ящика» и синтетические проверки
+tools/diag-raw.bin
+tools/diag-test.bin
+
 # локальные превью кадров
 host/*.png
 host/config.json.bak
