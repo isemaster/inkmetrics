@@ -31,6 +31,22 @@ DEFAULT_IMAGES = [
     ("0x20000", "inkmetrics_idf.bin"),
 ]
 
+# Диск хоста (раздел msc, см. partitions.csv): образ собирает tools/make_setup_disk.py.
+# На диске лежат SETUP.CMD и скрипты настройки ПК — прибор приносит их с собой.
+# Отключается ключом --no-disk (если на диске есть чужие файлы, их не затираем).
+MSC_DISK_OFFSET = 0x670000
+MSC_DISK_IMAGE = ROOT / "firmware" / "media" / "setup-disk.img"
+
+
+def disk_image() -> Path | None:
+    if "--no-disk" in sys.argv:
+        return None
+    if not MSC_DISK_IMAGE.exists():
+        print(f"образа диска нет ({MSC_DISK_IMAGE}) — соберите: python tools/make_setup_disk.py",
+              flush=True)
+        return None
+    return MSC_DISK_IMAGE
+
 
 def layout(build: str) -> tuple[list[str], list[tuple[str, str]]]:
     """(флаги esptool, [(адрес, файл)]) — из flash_args, если он есть."""
@@ -126,6 +142,10 @@ def main() -> int:
         tries = int(sys.argv[sys.argv.index("--tries") + 1])
 
     flags, images = layout(build)
+    disk = disk_image()
+    if disk:
+        images = images + [(hex(MSC_DISK_OFFSET), str(disk))]
+        print(f"диск хоста: {disk.name} ({disk.stat().st_size} Б) → {hex(MSC_DISK_OFFSET)}", flush=True)
     print("образы: " + ", ".join(f"{a} {f}" for a, f in images), flush=True)
     archive_build(build)      # ELF и .map — рядом, иначе дамп паники не расшифровать
 

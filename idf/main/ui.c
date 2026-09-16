@@ -42,6 +42,7 @@ static volatile int  s_page;
 static volatile bool s_redraw;
 static bool s_panel_ok;
 static bool s_sensor_ok;
+static volatile float s_t_c, s_rh_c;      /* последние показания датчика (для веб-страницы) */
 
 static void btn_cb(btn_id_t btn, btn_event_t ev)
 {
@@ -93,6 +94,8 @@ static void ui_task(void *arg)
         if (now - last_sensor > SENSOR_PERIOD_US) {
             last_sensor = now;
             s_sensor_ok = shtc3_read(&t, &rh);
+            s_t_c = t;
+            s_rh_c = rh;
         }
         /* первый проход — рисуем сразу: иначе панель стоит пустой до первой перерисовки */
         if (!s_panel_ok || (!first && (now - last_draw < DRAW_PERIOD_US) && !s_redraw)) {
@@ -189,6 +192,19 @@ void ui_set_net_info(bool link_up, uint32_t rx_frames, uint32_t tx_frames,
     (void)tx_bytes;
     s_link = link_up;
     s_reconnects = reconnects;
+}
+
+void ui_get_sensor(bool *ok, float *t_c, float *rh)
+{
+    if (ok) {
+        *ok = s_sensor_ok;
+    }
+    if (t_c) {
+        *t_c = s_t_c;
+    }
+    if (rh) {
+        *rh = s_rh_c;
+    }
 }
 
 void ui_init(void)

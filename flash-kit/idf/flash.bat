@@ -1,9 +1,9 @@
 @echo off
-rem Flash inkmetrics (ESP-IDF build, USB network) to ESP32-S3-ePaper-1.54. Four images.
+rem inkmetrics (ESP-IDF build): firmware + host disk image.
 rem Usage: flash.bat COM5
 rem Put the board into bootloader first: hold BOOT, plug USB, keep 2 s, release.
-rem Note: debug build. Self-check: if the host stays silent for 5 minutes the board
-rem enters bootloader by itself (idf/main/selfcheck.c), so BOOT is not needed to re-flash.
+rem The disk image (setup-disk.img) contains SETUP.CMD - the device brings the PC
+rem setup scripts with it (see pc-setup folder for copies).
 rem ASCII only on purpose: cmd.exe renders Russian text from a UTF-8 .bat as garbage.
 setlocal
 if "%~1"=="" (
@@ -26,23 +26,26 @@ if errorlevel 1 (
   exit /b 1
 )
 
-echo Flashing IDF build to %~1 ...
+echo Flashing inkmetrics to %~1 ...
 %PY% -m esptool --chip esp32s3 --port %~1 --baud 921600 write-flash -z ^
-  0x0     "%~dp0bootloader.bin" ^
-  0x8000  "%~dp0partition-table.bin" ^
-  0xe000  "%~dp0ota_data_initial.bin" ^
-  0x20000 "%~dp0inkmetrics_idf.bin"
+  0x0      "%~dp0bootloader.bin" ^
+  0x8000   "%~dp0partition-table.bin" ^
+  0xe000   "%~dp0ota_data_initial.bin" ^
+  0x20000  "%~dp0inkmetrics_idf.bin" ^
+  0x670000 "%~dp0setup-disk.img"
 if errorlevel 1 (
   echo.
   echo FAILED. Check the port and that the board is in bootloader mode ^(hold BOOT, plug USB^).
   pause
   exit /b 1
 )
-rem Clear the sticky RTC force-download bit, then reset into the app. The bit is set by
-rem /api/boot or by the automatic fallback; while it is set the ROM re-enters download
-rem mode on every reset and the app would not start until USB is re-plugged.
-%PY% -m esptool --chip esp32s3 --port %~1 --before no-reset --after watchdog-reset ^
+
+rem Clear the sticky RTC bit (a previous /api/boot or self-check fallback sets it) and reset
+rem into the application, so USB does not have to be replugged.
+%PY% -m esptool --chip esp32s3 --port %~1 --before no-reset --after no-reset ^
   write-mem 0x6000812C 0x00
+
 echo.
-echo DONE. Windows should show a network adapter "Remote NDIS based Internet Sharing Device".
+echo DONE. The device should start: screen shows DEVICE page, the PC gets a new disk
+echo and a network adapter. Then run pc-setup\SETUP.CMD on this PC.
 pause

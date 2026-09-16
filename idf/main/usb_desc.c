@@ -25,18 +25,22 @@ enum {
     STRID_PRODUCT,
     STRID_SERIAL,
     STRID_INTERFACE,
+    STRID_MSC,
     STRID_COUNT
 };
 
 enum {
     ITF_NUM_RNDIS = 0,
     ITF_NUM_DATA = 1,
-    ITF_NUM_TOTAL = 2
+    ITF_NUM_MSC = 2,
+    ITF_NUM_TOTAL = 3
 };
 
-#define EPNUM_NOTIF 0x81
-#define EPNUM_OUT   0x02
-#define EPNUM_IN    0x82
+#define EPNUM_NOTIF  0x81
+#define EPNUM_OUT    0x02
+#define EPNUM_IN     0x82
+#define EPNUM_MSC_OUT 0x03
+#define EPNUM_MSC_IN  0x83
 
 const tusb_desc_device_t usb_desc_device = {
     .bLength = sizeof(tusb_desc_device_t),
@@ -57,12 +61,17 @@ const tusb_desc_device_t usb_desc_device = {
 };
 
 const uint8_t usb_desc_fs_config[] = {
-    /* номер конфигурации, число интерфейсов, индекс строки, длина, атрибуты, ток (мА) */
+    /* номер конфигурации, число интерфейсов, индекс строки, длина, атрибуты, ток (мА).
+       Интерфейсов три: RNDIS (два — управление и данные) + MSC (диск хоста).
+       Ток 250 мА — прибор питается от USB и держит панель с подсветкой чтения. */
     TUD_CONFIG_DESCRIPTOR(1, ITF_NUM_TOTAL, 0,
-                          TUD_CONFIG_DESC_LEN + TUD_RNDIS_DESC_LEN, 0x00, 100),
+                          TUD_CONFIG_DESC_LEN + TUD_RNDIS_DESC_LEN + TUD_MSC_DESC_LEN,
+                          0x00, 250),
     /* номер интерфейса, индекс строки, EP уведомлений и его размер, EP out/in и размер */
     TUD_RNDIS_DESCRIPTOR(ITF_NUM_RNDIS, STRID_INTERFACE,
                          EPNUM_NOTIF, 8, EPNUM_OUT, EPNUM_IN, 64),
+    /* диск хоста: интерфейс MSC с двумя bulk-точками */
+    TUD_MSC_DESCRIPTOR(ITF_NUM_MSC, STRID_MSC, EPNUM_MSC_OUT, EPNUM_MSC_IN, 64),
 };
 
 static const char s_langid[] = {0x09, 0x04};   /* English (US) */
@@ -73,6 +82,7 @@ const char *usb_desc_strings[] = {
     "inkmetrics e-paper",   /* продукт */
     "1",                     /* серийный номер */
     "inkmetrics net",       /* интерфейс RNDIS */
+    "inkmetrics disk",      /* интерфейс MSC (диск с setup.cmd) */
 };
 
 const int usb_desc_string_count = STRID_COUNT;

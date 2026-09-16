@@ -44,6 +44,7 @@
 #include "ui.h"                     /* экран прибора: панель, кнопки, SHTC3 (см. ui.c) */
 #include "timesync.h"               /* время с хоста: SNTP + подсказка от браузера */
 #include "probe.h"                  /* проверка сервисов хоста по сети */
+#include "msc.h"                    /* диск хоста: прибор выглядит ещё и флешкой */
 #include "ping_inet.h"              /* пинг во внешнюю сеть — то, что на экране */
 #include "netinfo.h"                /* режим адресации: от роутера или аварийный */
 #include "settings.h"               /* настройки прибора (поворот, блокировка диска, цель пинга) */
@@ -244,50 +245,171 @@ static esp_netif_driver_base_t s_usb_base = {
 };
 
 /* -------------------------------------------------------------- веб-сервер прибора */
+/* Страница состояния: показывает то же, что на экране прибора (решения 16.09):
+   режим адресации и адрес, пинг в интернет, датчик, хост и ОТКРЫТЫЕ порты, диск.
+   Настройки — на отдельной странице /setup. */
 static const char INDEX_HTML[] =
     "<!DOCTYPE html><html lang=\"ru\"><head><meta charset=\"utf-8\">"
     "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
     "<title>inkmetrics</title><style>"
     "body{font:14px/1.5 system-ui,sans-serif;margin:0;padding:16px;background:#111;color:#eee}"
-    "h1{font-size:18px;margin:0 0 12px}table{border-collapse:collapse;width:100%;max-width:520px}"
+    "h1{font-size:18px;margin:0 0 12px}table{border-collapse:collapse;width:100%;max-width:560px}"
     "td{padding:4px 8px;border-bottom:1px solid #333}td:last-child{text-align:right;color:#7fd}"
-    "a{color:#fc6}"
-    "</style></head><body><h1>inkmetrics — сервер в приборе</h1>"
-    "<p>Страница отдана самим прибором по USB-сети. На хосте не установлено ничего:"
-    " драйвер сетевой карты встроен в систему.</p>"
+    "a{color:#fc6} .warn{color:#f88}"
+    "</style></head><body><h1>inkmetrics — страница прибора</h1>"
     "<table id=\"t\"></table>"
-    "<p><a href=\"/api/boot\">Уйти в режим загрузки сейчас</a> — то же прибор сделает сам,"
-    " если хост молчит 5 минут (перепрошивка без кнопки BOOT).</p>"
-    "<script>const NEVER=4294967295;"
+    "<p><a href=\"/setup\">Настройки прибора</a> · "
+    "<a href=\"/api/state\">API (JSON)</a> · "
+    "<a href=\"/api/boot\">Уйти в режим загрузки сейчас</a></p>"
+    "<script>"
     "function hostTime(){const d=new Date();"
     "fetch('/api/host-time?unix='+Math.floor(d.getTime()/1000)+'&tz='+(-d.getTimezoneOffset()))"
     ".catch(()=>{});}"
     "async function up(){try{const r=await fetch('/api/state');const s=await r.json();"
-    "const age=(s.ping_age_s===NEVER)?'ни разу':(s.ping_age_s+' с назад');"
-    "const fb=s.fallback?(s.fallback_left_s+' с'):'выключен';"
-    "const host=s.host_name?(s.host_name+' ('+s.host+')'):s.host;"
-    "const tm=s.time_valid?(s.time+' '+s.tsrc):'нет (нужен NTP на хосте или открытая страница)';"
+    "const host=s.host_known?((s.host_name?s.host_name+' ('+s.host+')':s.host)):'не виден';"
+    "const tm=s.time_valid?(s.time+' '+s.date):'ожидаю время от браузера';"
+    "const ping=s.p_target?'пинг '+s.p_target+': '+(s.p_ok?(s.p_avg+' мс, потери '+s.p_loss+'%'):'нет ответа'):'-';"
+    "const hist=s.p_hist?s.p_hist:'-';"
+    "const ports=s.ports_checked?(s.ports?s.ports:'нет открытых портов'):'проверяю';"
     "document.getElementById('t').innerHTML="
-    "`<tr><td>Прошивка</td><td>${s.fw}</td></tr>`+"
-    "`<tr><td>Аптайм</td><td>${s.up} с</td></tr>`+"
-    "`<tr><td>Свободно памяти</td><td>${Math.round(s.heap/1024)} КБ</td></tr>`+"
-    "`<tr><td>USB-сеть</td><td>${s.link}</td></tr>`+"
+    "`<tr><td>Режим сети</td><td>${s.mode_ru}</td></tr>`+"
     "`<tr><td>Адрес прибора</td><td>${s.ip}</td></tr>`+"
-    "`<tr><td>Хост</td><td>${host}</td></tr>`+"
-    "`<tr><td>Время хоста</td><td>${tm}</td></tr>`+"
-    "`<tr><td>Ответ ping</td><td>${age} (${s.ping_ok} ок / ${s.ping_fail} таймаутов)</td></tr>`+"
-    "`<tr><td>Задержка</td><td>${s.rtt_last} мс (min ${s.rtt_min} / avg ${s.rtt_avg} / max ${s.rtt_max}), потери ${s.loss}%</td></tr>`+"
-    "`<tr><td>Канал</td><td>RX ${s.rx_rate}/с ${s.rx_kbs} КБ/с · TX ${s.tx_rate}/с ${s.tx_kbs} КБ/с</td></tr>`+"
-    "`<tr><td>Разрывы USB</td><td>${s.reconnects}</td></tr>`+"
-    "`<tr><td>Кадры от хоста</td><td>${s.frames} (DHCP ${s.dhcp})</td></tr>`+"
-    "`<tr><td>Запросы к серверу</td><td>${s.http}</td></tr>`+"
-    "`<tr><td>Сервисы хоста</td><td>${s.svc}</td></tr>`+"
+    "`<tr><td>Шлюз</td><td>${s.gw}</td></tr>`+"
+    "`<tr><td>Интернет</td><td>${ping}</td></tr>`+"
+    "`<tr><td>Последние отклики</td><td>${hist}</td></tr>`+"
+    "`<tr><td>Температура / влажность</td><td>${s.sensor?(s.t.toFixed(1)+' C / '+s.rh.toFixed(0)+' %'):'нет датчика'}</td></tr>`+"
+    "`<tr><td>Время</td><td>${tm}</td></tr>`+"
+    "`<tr><td>Хост (кто открыл страницу)</td><td>${host}</td></tr>`+"
+    "`<tr><td>Открытые порты хоста</td><td>${ports}</td></tr>`+"
     "`<tr><td>Веб-сервер хоста</td><td>${s.http_ok?(s.http_code+' за '+s.http_ms+' мс'):'нет ответа'}</td></tr>`+"
-    "`<tr><td>Молчание хоста</td><td>${s.silence_s} с</td></tr>`+"
-    "`<tr><td>Уход в загрузчик</td><td>${fb}</td></tr>`;"
+    "`<tr><td>Диск прибора</td><td>${Math.round(s.disk_kb)} КБ, ${s.wlock?'только чтение':'чтение и запись'}</td></tr>`+"
+    "`<tr><td>Поворот экрана</td><td>${s.rotation}°</td></tr>`+"
+    "`<tr><td>Прошивка</td><td>${s.fw}</td></tr>`+"
+    "`<tr><td>Аптайм / память</td><td>${s.up} с / ${Math.round(s.heap/1024)} КБ</td></tr>`+"
+    "`<tr><td>USB-сеть</td><td>${s.link? 'поднята':'нет'} (разрывов ${s.reconnects})</td></tr>`;"
     "}catch(e){document.getElementById('t').innerHTML="
     "'<tr><td>нет связи с прибором</td><td>'+e+'</td></tr>';}}"
     "hostTime();up();setInterval(up,2000);setInterval(hostTime,60000);</script></body></html>";
+
+/* Страница настроек: то же, что на экране SETTINGS, но с возможностью править.
+   Меняется: поворот экрана, блокировка записи на диск, цель пинга. */
+static const char SETUP_HTML_HEAD[] =
+    "<!DOCTYPE html><html lang=\"ru\"><head><meta charset=\"utf-8\">"
+    "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+    "<title>inkmetrics — настройки</title><style>"
+    "body{font:14px/1.5 system-ui,sans-serif;margin:0;padding:16px;background:#111;color:#eee}"
+    "h1{font-size:18px;margin:0 0 12px}form{max-width:420px}"
+    "label{display:block;margin:14px 0 6px;color:#bbb}"
+    "select,input[type=text]{width:100%;padding:8px;background:#1b1b1b;color:#eee;"
+    "border:1px solid #444;border-radius:6px}"
+    "button{margin-top:18px;padding:10px 16px;background:#2a6;border:0;border-radius:6px;"
+    "color:#041;font-weight:600;cursor:pointer}a{color:#fc6}"
+    ".ok{color:#7fd}.hint{color:#888;font-size:13px}"
+    "</style></head><body><h1>Настройки прибора</h1>";
+
+static esp_err_t setup_get(httpd_req_t *req)
+{
+    static char page[2304];
+    const settings_t *cfg = settings_get();
+    uint32_t disk_kb = 0;
+    bool wlock = false;
+    msc_info(NULL, &wlock, NULL, NULL);
+    msc_info(NULL, NULL, NULL, NULL);
+    {
+        uint32_t sectors = 0;
+        msc_info(&sectors, NULL, NULL, NULL);
+        disk_kb = sectors * 512u / 1024u;
+    }
+    int n = snprintf(page, sizeof(page),
+        "%s<form method=\"post\" action=\"/api/settings\">"
+        "<label>Поворот экрана</label><select name=\"rot\">"
+        "<option value=\"0\"%s>0° — как есть</option>"
+        "<option value=\"90\"%s>90°</option>"
+        "<option value=\"180\"%s>180° — вверх ногами</option>"
+        "<option value=\"270\"%s>270°</option></select>"
+        "<label>Цель пинга в интернете</label>"
+        "<input type=\"text\" name=\"ping\" maxlength=\"31\" value=\"%s\">"
+        "<label><input type=\"checkbox\" name=\"wlock\"%s> Диск прибора только для чтения</label>"
+        "<button type=\"submit\">Сохранить</button></form>"
+        "<p class=\"hint\">Диск: %u КБ, сейчас %s. Прошивка %s.</p>"
+        "<p class=\"hint\">Кнопками прибора тоже можно: на экране SETTINGS короткое BOOT — поворот,"
+        " удержание BOOT — блокировка диска. PWR листает страницы.</p>"
+        "<p><a href=\"/\">Состояние</a></p></body></html>",
+        SETUP_HTML_HEAD,
+        cfg->rotation == 0 ? " selected" : "",
+        cfg->rotation == 90 ? " selected" : "",
+        cfg->rotation == 180 ? " selected" : "",
+        cfg->rotation == 270 ? " selected" : "",
+        cfg->ping_target,
+        cfg->disk_write_lock ? " checked" : "",
+        (unsigned)disk_kb,
+        wlock ? "только чтение" : "чтение и запись",
+        fw_version_str());
+    httpd_resp_set_type(req, "text/html; charset=utf-8");
+    return httpd_resp_send(req, page, n);
+}
+
+/* Разбор значения из тела формы (application/x-www-form-urlencoded). */
+static void form_value(const char *body, const char *key, char *out, size_t len)
+{
+    char pat[24];
+    snprintf(pat, sizeof(pat), "%s=", key);
+    const char *p = strstr(body, pat);
+    size_t i = 0;
+    if (!p) {
+        out[0] = 0;
+        return;
+    }
+    p += strlen(pat);
+    while (*p && *p != '&' && i + 1 < len) {
+        char c = *p++;
+        if (c == '+') {
+            c = ' ';
+        } else if (c == '%' && p[0] && p[1]) {
+            char hex[3] = { p[0], p[1], 0 };
+            c = (char)strtol(hex, NULL, 16);
+            p += 2;
+        }
+        out[i++] = c;
+    }
+    out[i] = 0;
+}
+
+static esp_err_t settings_post(httpd_req_t *req)
+{
+    char body[256];
+    char val[SETTINGS_PING_LEN];
+    int total = req->content_len;
+    if (total <= 0 || total >= (int)sizeof(body)) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad form");
+        return ESP_FAIL;
+    }
+    int r = httpd_req_recv(req, body, total);
+    if (r <= 0) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "recv failed");
+        return ESP_FAIL;
+    }
+    body[r] = 0;
+
+    form_value(body, "rot", val, sizeof(val));
+    if (val[0]) {
+        settings_set_rotation((uint8_t)atoi(val));
+    }
+    form_value(body, "ping", val, sizeof(val));
+    if (val[0]) {
+        settings_set_ping_target(val);
+    }
+    form_value(body, "wlock", val, sizeof(val));
+    settings_set_disk_write_lock(strcmp(val, "on") == 0 || strcmp(val, "1") == 0);
+
+    ESP_LOGI(TAG, "настройки сохранены: поворот %u, диск %s, цель %s",
+             (unsigned)settings_get()->rotation,
+             settings_get()->disk_write_lock ? "только чтение" : "чтение и запись",
+             settings_get()->ping_target);
+    httpd_resp_set_status(req, "303 See Other");
+    httpd_resp_set_hdr(req, "Location", "/setup");
+    return httpd_resp_send(req, "", 0);
+}
 
 /* Кто к нам пришёл — это и есть «хост». В режиме моста (прибор в локальной сети)
    узнать адрес ПК иначе нельзя: DHCP-обмена с ним больше нет, а ARP-подсказка
@@ -339,55 +461,67 @@ static esp_err_t state_get(httpd_req_t *req)
 {
     selfcheck_http_hit();          /* хост дотянулся до нас — это признак жизни */
     note_host_from_request(req);
-    char json[1024];
-    char svc[128] = "";
-    esp_netif_ip_info_t ip = {0};
-    if (s_netif) {
-        esp_netif_get_ip_info(s_netif, &ip);
-    }
+
     selfcheck_status_t sc;
     selfcheck_status(&sc);
-    selfcheck_ping_stat_t ps;
-    selfcheck_ping_stats(&ps);
     probe_state_t pr;
     probe_get(&pr);
-    for (int i = 0; i < 6; i++) {
-        char one[24];
-        snprintf(one, sizeof(one), "%s%s", i ? " " : "", pr.svc[i].name ? pr.svc[i].name : "?");
-        strlcat(svc, one, sizeof(svc));
-        strlcat(svc, pr.svc[i].open ? ":ok" : ":-", sizeof(svc));
-    }
-    char tstr[16], dstr[16], tsrc[8];
+    ping_inet_stat_t pi;
+    ping_inet_get(&pi);
+    const settings_t *cfg = settings_get();
+
+    bool sensor_ok = false;
+    float t = 0, rh = 0;
+    ui_get_sensor(&sensor_ok, &t, &rh);
+
+    char tstr[16], dstr[16];
     timesync_time_str(tstr, sizeof(tstr));
     timesync_date_str(dstr, sizeof(dstr));
-    bool time_ok = timesync_source(tsrc, sizeof(tsrc));
+    bool time_ok = timesync_source(NULL, 0);
 
+    /* последние отклики пинга строкой: "3 2 4 3" мс */
+    char hist[48] = "";
+    for (int i = 0; i < pi.hist_len && i < PING_INET_HIST; i++) {
+        char one[10];
+        snprintf(one, sizeof(one), "%s%u", i ? " " : "", (unsigned)pi.hist[i]);
+        strlcat(hist, one, sizeof(hist));
+    }
+
+    uint32_t disk_sectors = 0;
+    bool wlock = false;
+    msc_info(&disk_sectors, &wlock, NULL, NULL);
+
+    const char *mode_ru = "нет адреса";
+    if (s_net_mode == NET_MODE_ROUTER) {
+        mode_ru = "адрес получен (роутер или раздача с ПК)";
+    } else if (s_net_mode == NET_MODE_EMERGENCY) {
+        mode_ru = "аварийный (192.168.7.1, адрес выдаёт прибор)";
+    }
+
+    static char json[1200];
     int n = snprintf(json, sizeof(json),
-                     "{\"fw\":\"%s\",\"up\":%lld,\"heap\":%u,\"link\":\"%s\",\"ip\":\"" IPSTR "\","
-                     "\"host\":\"%s\",\"host_name\":\"%s\",\"host_known\":%u,"
-                     "\"time\":\"%s\",\"date\":\"%s\",\"tsrc\":\"%s\",\"time_valid\":%u,"
-                     "\"silence_s\":%u,\"fallback_left_s\":%u,"
-                     "\"ping_ok\":%u,\"ping_fail\":%u,\"ping_age_s\":%u,"
-                     "\"rtt_last\":%u,\"rtt_min\":%u,\"rtt_avg\":%u,\"rtt_max\":%u,\"loss\":%u,"
-                     "\"rx_rate\":%u,\"tx_rate\":%u,\"rx_kbs\":%u,\"tx_kbs\":%u,\"reconnects\":%u,"
-                     "\"http\":%u,\"frames\":%u,\"dhcp\":%u,\"http_up\":%u,\"fallback\":%u,"
-                     "\"svc\":\"%s\",\"http_ok\":%u,\"http_code\":%d,\"http_ms\":%u}",
-                     FW_VERSION, esp_timer_get_time() / 1000000,
-                     (unsigned)esp_get_free_heap_size(),
-                     s_link_up ? "поднята" : "нет",
-                     IP2STR(&ip.ip),
-                     sc.host, selfcheck_host_name(), (unsigned)sc.host_known,
-                     tstr, dstr, tsrc, (unsigned)(time_ok ? 1 : 0),
-                     (unsigned)sc.silence_s, (unsigned)sc.fallback_left_s,
-                     (unsigned)sc.ping_ok, (unsigned)sc.ping_fail, (unsigned)sc.ping_age_s,
-                     (unsigned)ps.last_ms, (unsigned)ps.min_ms, (unsigned)ps.avg_ms,
-                     (unsigned)ps.max_ms, (unsigned)ps.loss_pct,
-                     (unsigned)(s_rx_frames), (unsigned)(s_tx_frames),
-                     (unsigned)(s_rx_bytes / 1024), (unsigned)(s_tx_bytes / 1024),
-                     (unsigned)s_reconnects,
-                     (unsigned)sc.http_hits, (unsigned)sc.host_frames, (unsigned)sc.dhcp_frames,
-                     sc.http_up ? 1u : 0u, (unsigned)(SELFCHECK_ENABLED ? 1 : 0),
-                     svc, pr.http_ok ? 1u : 0u, pr.http_code, (unsigned)pr.http_ms);
+        "{\"fw\":\"%s\",\"up\":%lld,\"heap\":%u,\"link\":%u,\"reconnects\":%u,"
+        "\"mode\":\"%s\",\"mode_ru\":\"%s\",\"ip\":\"%s\",\"gw\":\"%s\","
+        "\"p_target\":\"%s\",\"p_ok\":%u,\"p_avg\":%u,\"p_min\":%u,\"p_max\":%u,\"p_loss\":%u,"
+        "\"p_hist\":\"%s\",\"p_ip\":\"%s\","
+        "\"sensor\":%u,\"t\":%.1f,\"rh\":%.1f,"
+        "\"time\":\"%s\",\"date\":\"%s\",\"time_valid\":%u,"
+        "\"host\":\"%s\",\"host_name\":\"%s\",\"host_known\":%u,"
+        "\"ports\":\"%s\",\"ports_checked\":%u,\"http_ok\":%u,\"http_code\":%d,\"http_ms\":%u,"
+        "\"disk_kb\":%u,\"wlock\":%u,\"rotation\":%u,"
+        "\"silence_s\":%u,\"fallback_left_s\":%u,\"http\":%u}",
+        fw_version_str(), esp_timer_get_time() / 1000000,
+        (unsigned)esp_get_free_heap_size(), s_link_up ? 1u : 0u, (unsigned)s_reconnects,
+        net_mode_text(), mode_ru, net_ip_str(), net_gw_str(),
+        pi.target ? pi.target : "-", pi.ok ? 1u : 0u, (unsigned)pi.avg_ms, (unsigned)pi.min_ms,
+        (unsigned)pi.max_ms, (unsigned)pi.loss_pct, hist, pi.ip,
+        (unsigned)(sensor_ok ? 1 : 0), (double)t, (double)rh,
+        tstr, dstr, (unsigned)(time_ok ? 1 : 0),
+        sc.host, selfcheck_host_name(), (unsigned)sc.host_known,
+        pr.ports, (unsigned)(pr.checked ? 1 : 0), pr.http_ok ? 1u : 0u, pr.http_code,
+        (unsigned)pr.http_ms,
+        (unsigned)(disk_sectors * 512u / 1024u), wlock ? 1u : 0u, (unsigned)cfg->rotation,
+        (unsigned)sc.silence_s, (unsigned)sc.fallback_left_s, (unsigned)sc.http_hits);
     httpd_resp_set_type(req, "application/json");
     return httpd_resp_send(req, json, n);
 }
@@ -422,10 +556,14 @@ static void start_http(void)
     ESP_ERROR_CHECK(httpd_start(&server, &cfg));
 
     httpd_uri_t uri_index = { .uri = "/", .method = HTTP_GET, .handler = index_get };
+    httpd_uri_t uri_setup = { .uri = "/setup", .method = HTTP_GET, .handler = setup_get };
+    httpd_uri_t uri_sset  = { .uri = "/api/settings", .method = HTTP_POST, .handler = settings_post };
     httpd_uri_t uri_state = { .uri = "/api/state", .method = HTTP_GET, .handler = state_get };
     httpd_uri_t uri_boot  = { .uri = "/api/boot", .method = HTTP_GET, .handler = boot_get };
     httpd_uri_t uri_time  = { .uri = "/api/host-time", .method = HTTP_GET, .handler = hosttime_get };
     ESP_ERROR_CHECK(httpd_register_uri_handler(server, &uri_index));
+    ESP_ERROR_CHECK(httpd_register_uri_handler(server, &uri_setup));
+    ESP_ERROR_CHECK(httpd_register_uri_handler(server, &uri_sset));
     ESP_ERROR_CHECK(httpd_register_uri_handler(server, &uri_state));
     ESP_ERROR_CHECK(httpd_register_uri_handler(server, &uri_boot));
     ESP_ERROR_CHECK(httpd_register_uri_handler(server, &uri_time));
@@ -760,6 +898,7 @@ void app_main(void)
     ESP_ERROR_CHECK(ret);
     diag_step("NVS готова");
     settings_init();               /* настройки: поворот экрана, блокировка диска, цель пинга */
+    msc_init();                    /* диск хоста: раздел msc отдаётся как флешка */
 
     esp_err_t ierr = esp_netif_init();
     diag_step("esp_netif_init → %s", esp_err_to_name(ierr));
