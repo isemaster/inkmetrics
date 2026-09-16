@@ -19,6 +19,7 @@
 
 #include "esp_log.h"
 #include "esp_partition.h"
+#include "diag.h"
 #include "settings.h"
 #include "tusb.h"
 
@@ -65,6 +66,50 @@ void msc_info(uint32_t *sectors, bool *write_locked, uint32_t *reads, uint32_t *
 }
 
 /* ------------------------------------------------------------------ TinyUSB MSC */
+
+/* Носитель всегда на месте: диск — это раздел во флеше, вынимать нечего.
+   ВАЖНО: этот колбэк обязательно свой. В вендорном `esp_tinyusb` есть свой
+   `tud_msc_test_unit_ready_cb`, который при незарегистрированном хранилище отвечает
+   «носителя нет» — тогда хост в цикле передёргивает устройство: диск не появляется,
+   а прибор раз в секунду пропадает с шины (именно это и случилось 16.09).
+   В `tinyusb_msc.c` их колбэки помечены weak (см. ПРАВКА INKMETRICS там же). */
+bool tud_msc_test_unit_ready_cb(uint8_t lun)
+{
+    (void)lun;
+    static bool logged;
+    if (!s_part) {
+        return false;                  /* раздела нет — честно говорим «нет носителя» */
+    }
+    if (!logged) {
+        logged = true;
+        ESP_LOGI(TAG, "хост запросил готовность диска — отвечаю «готов»");
+        diag_step("диск: первый TEST UNIT READY от хоста");
+    }
+    return true;
+}
+
+/* Как диск себя называет хосту. */
+void tud_msc_inquiry_cb(uint8_t lun, uint8_t vendor_id[8], uint8_t product_id[16],
+                        uint8_t product_rev[4])
+{
+    (void)lun;
+    memset(vendor_id, ' ', 8);
+    memset(product_id, ' ', 16);
+    memset(product_rev, ' ', 4);
+    memcpy(vendor_id, "inkmetrics", 7);
+    memcpy(product_id, "monitor disk", 12);
+    memcpy(product_rev, "1.0", 3);
+}
+
+/* Просьбы «вынь носитель» игнорируем: диск есть всегда. */
+bool tud_msc_start_stop_cb(uint8_t lun, uint8_t power_condition, bool start, bool load_eject)
+{
+    (void)lun;
+    (void)power_condition;
+    (void)start;
+    (void)load_eject;
+    return true;
+}
 
 /* Размер диска: постоянный, поэтому отдаём константой. */
 void tud_msc_capacity_cb(uint8_t lun, uint32_t *block_count, uint16_t *block_size)
@@ -123,36 +168,18 @@ int32_t tud_msc_write10_cb(uint8_t lun, uint32_t lba, uint32_t offset, uint8_t *
     return (int32_t)bufsize;
 }
 
-/* Команды, которые стек отдаёт приложению: INQUIRY и «готовность носителя». */
+/* Остальные команды: стандартные (INQUIRY, TEST UNIT READY, READ CAPACITY, MODE SENSE,
+   REQUEST SENSE, PREVENT_ALLOW) стек разбирает сам через наши колбэки выше; всё прочее
+   не поддерживаем — возвращаем -1, как в примере TinyUSB. */
 int32_t tud_msc_scsi_cb(uint8_t lun, uint8_t const scsi_cmd[16], void *buffer, uint16_t bufsize)
 {
     (void)lun;
-    int32_t ret = -1;
-
-    switch (scsi_cmd[0]) {
-    case SCSI_CMD_TEST_UNIT_READY:
-    case SCSI_CMD_PREVENT_ALLOW_MEDIUM_REMOVAL:
-        ret = 0;                        /* диск на месте и всегда готов */
-        break;
-
-    case SCSI_CMD_INQUIRY: {
-        if (bufsize < sizeof(scsi_inquiry_resp_t)) {
-            return -1;
-        }
-        scsi_inquiry_resp_t *r = (scsi_inquiry_resp_t *)buffer;
-        memset(r, 0, sizeof(*r));
-        r->peripheral_device_type = 0x00;      /* прямой доступ к блокам */
-        memcpy(r->vendor_id, "inkmetrics", 7);
-        memcpy(r->product_id, "monitor disk", 12);
-        memcpy(r->product_rev, "1.0", 3);
-        r->response_data_format = 0x02;        /* ответ в формате SPC, без доп. данных */
-        ret = (int32_t)sizeof(scsi_inquiry_resp_t);
-        break;
+    (void)buffer;
+    (void)bufsize;
+    static uint8_t logged;
+    if (logged < 3) {
+        logged++;
+        diag_step("диск: нестандартная SCSI-команда 0x%02X — отклоняю", (unsigned)scsi_cmd[0]);
     }
-
-    default:
-        ret = -1;                       /* остальное: MODE SENSE и прочее — не поддерживаем */
-        break;
-    }
-    return ret;
+    return -1;
 }

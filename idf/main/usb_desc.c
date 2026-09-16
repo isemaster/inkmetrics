@@ -63,10 +63,11 @@ const tusb_desc_device_t usb_desc_device = {
 const uint8_t usb_desc_fs_config[] = {
     /* номер конфигурации, число интерфейсов, индекс строки, длина, атрибуты, ток (мА).
        Интерфейсов три: RNDIS (два — управление и данные) + MSC (диск хоста).
-       Ток 250 мА — прибор питается от USB и держит панель с подсветкой чтения. */
+       Ток 100 мА (было 250 — вернули: на другом ПК с этим значением устройство
+       могло не конфигурироваться). */
     TUD_CONFIG_DESCRIPTOR(1, ITF_NUM_TOTAL, 0,
                           TUD_CONFIG_DESC_LEN + TUD_RNDIS_DESC_LEN + TUD_MSC_DESC_LEN,
-                          0x00, 250),
+                          0x00, 100),
     /* номер интерфейса, индекс строки, EP уведомлений и его размер, EP out/in и размер */
     TUD_RNDIS_DESCRIPTOR(ITF_NUM_RNDIS, STRID_INTERFACE,
                          EPNUM_NOTIF, 8, EPNUM_OUT, EPNUM_IN, 64),

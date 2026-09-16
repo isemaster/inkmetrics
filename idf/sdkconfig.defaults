@@ -49,5 +49,5 @@ CONFIG_ESP_INT_WDT_TIMEOUT_MS=3000
 # Диск прибора: он же выступает флешкой с setup.cmd внутри (см. docs/plan-usb-installer.md).
 # Включаем класс MSC рядом с сетью — описатели задаём сами в usb_desc.c.
 CONFIG_TINYUSB_MSC_ENABLED=y
-CONFIG_TINYUSB_MSC_BUFSIZE=4096
+CONFIG_TINYUSB_MSC_BUFSIZE=512
 CONFIG_TINYUSB_DESC_MSC_STRING="inkmetrics disk"
