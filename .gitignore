@@ -25,6 +25,10 @@ firmware/backup/
 tools/diag-raw.bin
 tools/diag-test.bin
 
+# комплект для заливки на другом ПК: образы не версионируем (их кладут из сборок),
+# инструкции и .bat — в git
+flash-kit/*/*.bin
+
 # локальные превью кадров
 host/*.png
 host/config.json.bak
