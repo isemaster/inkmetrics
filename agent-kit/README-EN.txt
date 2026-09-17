@@ -30,6 +30,9 @@ Installation (5 steps)
 1. Connect the device to the PC with a USB cable (directly to a port, no hub).
 2. Start instagent.cmd by double click. Windows asks for administrator rights -
    accept ("Yes"). The rights are needed once, to register the tasks.
+   IMPORTANT: if you want the metrics on the device, start it with --no-ics (no
+   internet sharing) - otherwise sharing moves the device to another subnet and the
+   metrics never arrive; see the ICS section below.
 3. Wait for the lines "task ... registered" and "Agent installed". The window
    stays open, so you can read it calmly.
 4. Check the device: press PWR until page HOST SYS (5/5). It shows CPU, memory,
@@ -67,10 +70,13 @@ IMPORTANT, known limitation: while sharing is on, the device adapter becomes
 agent still posts to 192.168.7.1 - in that mode metrics do NOT arrive (the device
 does have internet). Until this is fixed, pick one:
 
-    * you want metrics   - turn sharing off: ICS.PS1 -Off (from the pc-setup
-                           folder), or clear "Allow other users..." in the
-                           properties of the device adapter;
-    * you want internet  - keep sharing on and do not expect metrics.
+    * you want metrics   - install with --no-ics: instagent.cmd --no-ics. Sharing
+                           is then neither turned on nor scheduled; if it was on
+                           before, turn it off: ICS.PS1 -Off (pc-setup set) or
+                           clear "Allow other users..." in the properties of the
+                           device adapter;
+    * you want internet  - install as is (instagent.cmd) and do not expect metrics
+                           until the device and the agent use the same address.
 
 Removal
 -------
@@ -83,6 +89,8 @@ Switches and variables
 ----------------------
     instagent.cmd --dry-run    change nothing: unpack into a temporary folder and
                                show what would be done
+    instagent.cmd --no-ics     install the metrics agent only, without internet
+                               sharing (recommended when you want the metrics)
     deinstall.cmd --dry-run    only report the state: tasks, process, folder
     EINK_INSTALL_DIR=path      install into another folder instead of
                                C:\ProgramData\inkmetrics (used for testing)
@@ -120,6 +128,21 @@ Requirements and limitations
 * The agent knows the device address 192.168.7.1. If the device got another
   address (for example 192.168.137.x with sharing on), metrics will not arrive -
   see the ICS section above.
+
+What this set does NOT do
+-------------------------
+These two files do exactly two things: metrics on the device and (optionally)
+internet sharing. A full setup of a PC for the device may also need:
+
+* the host adapter address. In emergency mode the device hands out addresses itself,
+  and if Windows takes the lease together with the gateway 192.168.7.1, this PC
+  loses its internet. The right way is to give the device adapter the address
+  192.168.7.2 with no gateway and metric 9000 - that is what FIXUSB.PS1 from the
+  pc-setup set does (-Restore puts it back), or do it by hand in the adapter
+  properties;
+* a repair when Windows does not show the device disk - FIXDISK.PS1 (pc-setup set);
+* a detailed check of the agent, the device and the network with verdicts -
+  CHECK.CMD (pc-setup set).
 
 Files nearby
 ------------

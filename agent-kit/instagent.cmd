@@ -15,6 +15,11 @@ rem  Tasks: "inkmetrics agent" and "inkmetrics ICS" - as SYSTEM, at startup, at
 rem  logon and every minute.
 rem
 rem  Usage:   instagent.cmd              install (asks for administrator rights)
+rem           instagent.cmd --no-ics     install WITHOUT internet sharing: only the
+rem                                      metrics agent. Use this when you want the
+rem                                      numbers on the device: with sharing on the
+rem                                      device moves to 192.168.137.x and the agent,
+rem                                      which knows only 192.168.7.1, cannot reach it.
 rem           instagent.cmd --dry-run    unpack into TEMP only, change nothing
 rem  Removal: deinstall.cmd
 rem
@@ -26,8 +31,12 @@ rem ============================================================================
 setlocal EnableExtensions
 set "SELF=%~f0"
 set "DRY="
+set "NOICS="
 set "DIR="
-if /i "%~1"=="--dry-run" set "DRY=1"
+for %%A in (%*) do (
+    if /i "%%A"=="--dry-run" set "DRY=1"
+    if /i "%%A"=="--no-ics"  set "NOICS=1"
+)
 
 if defined EINK_INSTALL_DIR set "DIR=%EINK_INSTALL_DIR%"
 if not defined DIR if defined DRY set "DIR=%TEMP%\inkmetrics-dry-run"
@@ -37,6 +46,7 @@ echo.
 echo   inkmetrics: agent installer
 echo   install folder : %DIR%
 if defined DRY echo   mode           : DRY RUN - files go to TEMP, nothing is registered
+if defined NOICS echo   sharing (ICS)  : NOT installed - metrics only
 echo.
 
 if not defined DRY (
@@ -76,14 +86,17 @@ for %%A in ("%DIR%\agent.ps1") do if %%~zA LSS 2000 (
 
 if defined DRY (
     echo.
-    echo   DRY RUN: would stop an old agent, register the two tasks, turn the sharing on
+    echo   DRY RUN: would stop an old agent, register the tasks, turn the sharing on
     echo   and start the agent. Nothing was changed.
     echo   Unpacked files are in "%DIR%" - delete that folder by hand.
     exit /b 0
 )
 
+set "SETUPARGS="
+if defined NOICS set "SETUPARGS=-NoIcs"
+
 echo.
-powershell -NoProfile -ExecutionPolicy Bypass -File "%DIR%\setup.ps1"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%DIR%\setup.ps1" %SETUPARGS%
 if errorlevel 1 (
     echo.
     echo   The installer reported a problem - see the lines above.
@@ -589,7 +602,11 @@ if (-not (Test-Path $Agent)) {
 }
 
 if ($DryRun) {
-    Say 'DRY RUN: would stop a running agent, register both tasks, turn the sharing on and start'
+    if ($NoIcs) {
+        Say 'DRY RUN: would stop a running agent, register the metrics task and start it (sharing NOT touched)'
+    } else {
+        Say 'DRY RUN: would stop a running agent, register both tasks, turn the sharing on and start'
+    }
     exit 0
 }
 

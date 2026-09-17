@@ -28,7 +28,11 @@ if (-not (Test-Path $Agent)) {
 }
 
 if ($DryRun) {
-    Say 'DRY RUN: would stop a running agent, register both tasks, turn the sharing on and start'
+    if ($NoIcs) {
+        Say 'DRY RUN: would stop a running agent, register the metrics task and start it (sharing NOT touched)'
+    } else {
+        Say 'DRY RUN: would stop a running agent, register both tasks, turn the sharing on and start'
+    }
     exit 0
 }
 
