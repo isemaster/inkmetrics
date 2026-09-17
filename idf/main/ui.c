@@ -131,23 +131,38 @@ static void ui_task(void *arg)
         memset(&st, 0, sizeof(st));
 
         /* метрики хоста от агента (POST /ingest): экран показывает ровно то, что
-           прислал хост, и возраст данных. Строки живут в im до конца итерации —
-           на них можно ссылаться в screen_state_t (кадр рисуется тут же). */
+           прислал хост. Строки живут в im до конца итерации — на них можно ссылаться
+           в screen_state_t (кадр рисуется тут же).
+
+           Если агент замолчал дольше SCREEN_ONLINE_S, числа СТИРАЮТСЯ (прочерки), а не
+           остаются последними известными: в рамке написано OFFLINE, и показывать рядом
+           с этим вчерашние 78° — значит выдавать старые данные за текущие. */
         ingest_state_t im;
         ingest_get(&im);
+        bool fresh = im.have && im.age_s <= SCREEN_ONLINE_S;
         st.agent_have = im.have;
         st.agent_age_s = im.age_s;
-        st.agent_ok = im.have && im.age_s <= SCREEN_ONLINE_S;
-        st.cpu_pct = im.cpu_pct;
-        st.mem_pct = im.mem_pct;
-        st.disk_pct = im.disk_pct;
-        st.gpu_count = im.gpu_count;
-        for (int i = 0; i < SCREEN_GPU_MAX; i++) {
-            st.gpu_temp_c[i] = im.gpu_temp_c[i];
-            st.gpu_pct[i] = im.gpu_pct[i];
+        st.agent_ok = fresh;
+        if (fresh) {
+            st.cpu_pct = im.cpu_pct;
+            st.mem_pct = im.mem_pct;
+            st.disk_pct = im.disk_pct;
+            st.gpu_count = im.gpu_count;
+            for (int i = 0; i < SCREEN_GPU_MAX; i++) {
+                st.gpu_temp_c[i] = im.gpu_temp_c[i];
+                st.gpu_pct[i] = im.gpu_pct[i];
+            }
+            st.hup_ok = im.up_h >= 0;
+            st.hup_h = im.up_h;
+        } else {
+            st.cpu_pct = st.mem_pct = st.disk_pct = -1.0f;
+            st.gpu_count = 0;                 /* карт не знаем: оба места с прочерками */
+            for (int i = 0; i < SCREEN_GPU_MAX; i++) {
+                st.gpu_temp_c[i] = -1;
+                st.gpu_pct[i] = -1.0f;
+            }
+            st.hup_ok = false;
         }
-        st.hup_ok = im.up_h >= 0;
-        st.hup_h = im.up_h;
 
         st.sensor_ok = s_sensor_ok;
         st.t_c = t;
@@ -166,7 +181,7 @@ static void ui_task(void *arg)
 
         ESP_LOGI(TAG, "экран %d: %s, возраст данных %u с, карт %d, cpu %.0f%%, "
                       "gpu0 %d C, gpu1 %d C",
-                 s_page, st.agent_ok ? "ONLINE" : "НЕТ СВЯЗИ", (unsigned)st.agent_age_s,
+                 s_page, st.agent_ok ? "ONLINE" : "OFFLINE", (unsigned)st.agent_age_s,
                  st.gpu_count, (double)st.cpu_pct, st.gpu_temp_c[0], st.gpu_temp_c[1]);
         screen_show(&st, s_page);
     }
