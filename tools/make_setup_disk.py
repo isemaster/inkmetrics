@@ -23,6 +23,8 @@ tools/make_disk_image.py. Так Windows заводит обычный съём�
 | AGENT.PS1 | tools/pc_setup/agent_install.ps1 | настройка раздачи интернета (ICS) |
 | ICS.PS1 | tools/ics_enable.ps1 | включение ICS на адаптере прибора |
 | NETCHECK.PS1 | tools/net_check2.ps1 | диагностика сети, если что-то не встало |
+| CHECK.CMD | tools/pc_setup/check.cmd | точка входа проверки: двойной клик, в конце пауза |
+| CHECK.PS1 | tools/pc_setup/check.ps1 | сами проверки: прибор, диск, агент, задачи, метрики |
 | READRU.TXT, READMEEN.TXT | tools/pc_setup/README-*.txt | описание для человека |
 
 Размер образа обязан совпадать с MSC_SECTORS в idf/main/msc.c и с разделом `msc`
@@ -81,6 +83,8 @@ def main() -> int:
         ("AGENT.PS1", read(os.path.join(PC_SETUP, "agent_install.ps1"))),
         ("ICS.PS1", read(os.path.join(HERE, "ics_enable.ps1"))),
         ("NETCHECK.PS1", read(os.path.join(HERE, "net_check2.ps1"))),
+        ("CHECK.PS1", read(os.path.join(PC_SETUP, "check.ps1"))),
+        ("CHECK.CMD", read(os.path.join(PC_SETUP, "check.cmd"))),
         ("READRU.TXT", read(os.path.join(PC_SETUP, "README-RU.txt"), bom=True)),
         ("READMEEN.TXT", read(os.path.join(PC_SETUP, "README-EN.txt"), bom=True)),
     ]
