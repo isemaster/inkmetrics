@@ -14,4 +14,4 @@ gcc -std=c99 -Wall -Wextra -O1 \
 
 cd "$HERE"
 ./preview
-echo "готово: $HERE/summary.pgm, setup.pgm, stale.pgm"
+echo "готово: $HERE/summary.pgm, setup.pgm, offline.pgm, nodata.pgm"

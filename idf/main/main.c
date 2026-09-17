@@ -343,7 +343,7 @@ static const char INDEX_HTML[] =
     "+(im.gpu1>=0?(' GPU1 '+im.gpu1+'%'+(im.gpu1_temp>=0?(' '+im.gpu1_temp+'C'):'')):'')"
     "+(im.cpu_temp>=0?(' TMP '+im.cpu_temp+'C'):'')"
     "+', '+im.age+' с назад'+(im.fresh?'':' (УСТАРЕЛО)')):'нет данных от агента';"
-    "const met2=im.have?((im.ping_ok?('пинг '+im.ping_ms+' мс'):'пинг: нет ответа')"
+    "const met2=im.have?((im.ping_known?(im.ping_ok?('интернет хоста: есть, '+im.ping_ms+' мс до '+(im.ping_target||'-')):('интернет хоста: НЕТ (пинг '+(im.ping_target||'-')+' не отвечает)')):'интернет хоста: не проверялся')"
     "+' · TCP '+im.tcp+(im.up_h>=0?(' · аптайм '+im.up_h.toFixed(1)+' ч'):'')"
     "+' · SMART '+(im.smart?im.smart:'-')+(im.count?(' · приёмов '+im.count):'')):'-';"
     "document.getElementById('t').innerHTML="
@@ -595,7 +595,8 @@ static esp_err_t state_get(httpd_req_t *req)
         "\"cpu\":%.0f,\"mem\":%.0f,\"disk\":%.0f,\"gpu_count\":%d,"
         "\"gpu0\":%.0f,\"gpu0_temp\":%d,\"gpu0_mem\":%.0f,"
         "\"gpu1\":%.0f,\"gpu1_temp\":%d,\"gpu1_mem\":%.0f,"
-        "\"cpu_temp\":%d,\"ping_ok\":%u,\"ping_ms\":%u,\"up_h\":%.1f,\"tcp\":%d,\"smart\":\"%s\"}}",
+        "\"cpu_temp\":%d,\"ping_known\":%u,\"ping_ok\":%u,\"ping_ms\":%u,\"ping_target\":\"%s\","
+        "\"up_h\":%.1f,\"tcp\":%d,\"smart\":\"%s\"}}",
         fw_version_str(), esp_timer_get_time() / 1000000,
         (unsigned)esp_get_free_heap_size(), s_link_up ? 1u : 0u, (unsigned)s_reconnects,
         net_mode_text(), mode_ru, net_ip_str(), net_gw_str(),
@@ -614,7 +615,8 @@ static esp_err_t state_get(httpd_req_t *req)
         im.gpu_count,
         (double)im.gpu_pct[0], im.gpu_temp_c[0], (double)im.gpu_mem_pct[0],
         (double)im.gpu_pct[1], im.gpu_temp_c[1], (double)im.gpu_mem_pct[1],
-        im.cpu_temp_c, (unsigned)im.ping_ok, (unsigned)im.ping_ms, (double)im.up_h,
+        im.cpu_temp_c, (unsigned)(im.ping_known ? 1 : 0), (unsigned)im.ping_ok,
+        (unsigned)im.ping_ms, im.ping_target, (double)im.up_h,
         (int)im.tcp_est, im.smart);
     httpd_resp_set_type(req, "application/json");
     return httpd_resp_send(req, json, n);

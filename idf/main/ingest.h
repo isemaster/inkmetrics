@@ -60,8 +60,10 @@ typedef struct {
     int      gpu_temp_c[INGEST_GPU_MAX];  /* температура, °C */
 
     int      cpu_temp_c;                  /* температура CPU, °C */
-    int      ping_ok;                     /* 1 — хост пингует свою цель */
+    bool     ping_known;                  /* хост вообще проверял интернет (поле пришло) */
+    int      ping_ok;                     /* 1 — хост дотянулся до цели пинга (интернет есть) */
     uint32_t ping_ms;
+    char     ping_target[INGEST_HOST_LEN];/* что хост пинговал: 8.8.8.8, ya.ru и т.п. */
     float    up_h;                        /* аптайм хоста, часы */
     int32_t  tcp_est;                     /* установленных TCP-соединений; INGEST_NA — нет данных */
 } ingest_state_t;

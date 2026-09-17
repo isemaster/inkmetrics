@@ -170,6 +170,7 @@ void ingest_apply(const char *json)
 
     json_str(json, "hostname", st.host, sizeof(st.host));
     json_str(json, "smart_status", st.smart, sizeof(st.smart));
+    json_str(json, "ping_target", st.ping_target, sizeof(st.ping_target));
 
     if (json_num(json, "cpu_percent", &d)) {
         st.cpu_pct = (float)d;
@@ -194,6 +195,7 @@ void ingest_apply(const char *json)
     }
     if (json_bool(json, "ping_ok", &b)) {
         st.ping_ok = b ? 1 : 0;
+        st.ping_known = true;      /* хост проверил интернет и сказал результат */
     }
 
     /* карты: сначала новый формат, затем старый одиночный набор как карта 0 */

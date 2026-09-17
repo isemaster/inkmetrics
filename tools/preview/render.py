@@ -26,9 +26,10 @@ W = H = 200
 SCALE = 3
 
 FRAMES = [
-    ("summary.pgm", "СВОДНЫЙ — работа (PWR -> SETUP)"),
+    ("summary.pgm", "ONLINE — у хоста есть интернет (PWR -> SETUP)"),
     ("setup.pgm", "SETUP — вход по PWR"),
-    ("stale.pgm", "СВОДНЫЙ — агент молчит"),
+    ("offline.pgm", "OFFLINE — интернета у хоста нет"),
+    ("nodata.pgm", "NO DATA — агент молчит"),
 ]
 
 

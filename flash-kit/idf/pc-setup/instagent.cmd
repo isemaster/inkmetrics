@@ -119,7 +119,7 @@ rem =====PAYLOAD:agent.ps1=====# agent.ps1 - host monitoring agent: collects hos
 # Settings (edit here; the device itself needs no setup):
 $DeviceIP   = "192.168.7.1"      # device IP (the ADDR line on its screen)
 $Interval   = 60                 # seconds between sends
-$PingTarget = "8.8.8.8"          # ping target
+$PingTarget = "8.8.8.8"          # internet check target: ICMP, then TCP 443 (ONLINE/OFFLINE)
 $HostName   = $env:COMPUTERNAME  # host name shown on the device
 $Port       = 80                 # ingest port on the device
 $LogPath    = "C:\ProgramData\inkmetrics\agent.log"
@@ -241,6 +241,11 @@ function Get-DiskPercent {
 }
 
 function Get-Ping {
+    # Internet check for the ONLINE/OFFLINE frame on the device.
+    # ICMP first (Test-Connection): it also gives the latency. If ICMP does not answer, the
+    # internet may still be there (providers and firewalls drop echo requests), so the answer
+    # is double-checked with a TCP connect to the same host on 443. Reporting "no internet"
+    # for a working line is worse than a slower check.
     try {
         $r = Test-Connection -ComputerName $PingTarget -Count 1 -Quiet
         if ($r) {
@@ -249,12 +254,22 @@ function Get-Ping {
             $null = Test-Connection -ComputerName $PingTarget -Count 1 -Quiet
             $ms = [math]::Round(([DateTime]::Now - $t0).TotalMilliseconds)
             return @{ ok = $true; ms = [int]$ms }
-        } else {
-            return @{ ok = $false; ms = 0 }
         }
-    } catch {
-        return @{ ok = $false; ms = 0 }
-    }
+    } catch { }
+
+    try {
+        $t0 = [DateTime]::Now
+        $c = New-Object System.Net.Sockets.TcpClient
+        $iar = $c.BeginConnect($PingTarget, 443, $null, $null)
+        if ($iar.AsyncWaitHandle.WaitOne(3000, $false) -and $c.Connected) {
+            $ms = [math]::Round(([DateTime]::Now - $t0).TotalMilliseconds)
+            $c.Close()
+            return @{ ok = $true; ms = [int]$ms }
+        }
+        $c.Close()
+    } catch { }
+
+    return @{ ok = $false; ms = 0 }
 }
 
 function Get-UptimeHours {
@@ -365,6 +380,7 @@ function Build-Json {
         gpu1_mem_percent = if ($g1) { $g1.mem } else { $null }
         ping_ok       = $ping.ok
         ping_ms       = $ping.ms
+        ping_target   = $PingTarget
         uptime_hours  = $up
         tcp_established = $tcp
         cpu_temp      = $temp

@@ -143,6 +143,19 @@ static void ui_task(void *arg)
         st.agent_have = im.have;
         st.agent_age_s = im.age_s;
         st.agent_ok = fresh;
+
+        /* Состояние ХОСТА по интернету — то, что написано в рамке. Считается из пинга,
+           который делает сам хост (агент пингует свою цель, по умолчанию 8.8.8.8), а не
+           из факта «метрики пришли»: метрики ходят по USB, и при живом агенте интернета
+           на хосте может не быть вовсе.
+             ONLINE  — метрики свежие И хост дотянулся до цели пинга;
+             OFFLINE — метрики свежие, интернета у хоста нет;
+             NO DATA — агент молчит: про интернет хоста прибор ничего не знает (screen.c). */
+        st.host_net_known = im.ping_known;
+        st.host_online = fresh && im.ping_known && im.ping_ok;
+        st.host_ping_ms = im.ping_ms;
+        st.host_ping_target = im.ping_target;
+
         if (fresh) {
             st.cpu_pct = im.cpu_pct;
             st.mem_pct = im.mem_pct;
@@ -179,10 +192,16 @@ static void ui_task(void *arg)
            своего адреса: без него прибор недоступен и в браузере тоже */
         st.emergency = (net_mode() == NET_MODE_NONE) && (st.up_s > EMERGENCY_S);
 
-        ESP_LOGI(TAG, "экран %d: %s, возраст данных %u с, карт %d, cpu %.0f%%, "
-                      "gpu0 %d C, gpu1 %d C",
-                 s_page, st.agent_ok ? "ONLINE" : "OFFLINE", (unsigned)st.agent_age_s,
-                 st.gpu_count, (double)st.cpu_pct, st.gpu_temp_c[0], st.gpu_temp_c[1]);
+        const char *state = "NO DATA";
+        if (st.agent_ok) {
+            state = st.host_online ? "ONLINE" : "OFFLINE";
+        }
+        ESP_LOGI(TAG, "экран %d: хост %s (метрикам %u с, пинг %s %u мс), карт %d, "
+                      "cpu %.0f%%, gpu0 %d C, gpu1 %d C",
+                 s_page, state, (unsigned)st.agent_age_s,
+                 st.host_ping_target && st.host_ping_target[0] ? st.host_ping_target : "-",
+                 (unsigned)st.host_ping_ms, st.gpu_count, (double)st.cpu_pct,
+                 st.gpu_temp_c[0], st.gpu_temp_c[1]);
         screen_show(&st, s_page);
     }
 }
