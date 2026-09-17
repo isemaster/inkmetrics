@@ -47,5 +47,5 @@ rem into the application, so USB does not have to be replugged.
 
 echo.
 echo DONE. The device should start: screen shows DEVICE page, the PC gets a new disk
-echo and a network adapter. Then run pc-setup\SETUP.CMD on this PC.
+echo and a network adapter. On that disk: instagent.cmd installs the agent,
 pause

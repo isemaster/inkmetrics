@@ -75,6 +75,64 @@ def read_fat12_volume(img: bytes, part_start: int) -> list[tuple[str, bytes]]:
 
 # --------------------------------------------------------------- building the new image
 
+def _lfn_checksum(short11: bytes) -> int:
+    """Контрольная сумма короткого имени - по ней Windows связывает LFN с записью файла."""
+    s = 0
+    for b in short11:
+        s = (((s & 1) << 7) + (s >> 1) + b) & 0xFF
+    return s
+
+
+def _short_name(name: str, taken: set[str]) -> str:
+    """Короткое имя 8.3 для файла (верхний регистр); длинные имена дополняются записями LFN."""
+    base, _, ext = name.upper().partition(".")
+    stem = "".join(c for c in base if c.isalnum() or c in "_-$%@!(){}^#&'")[:8]
+    ext3 = "".join(c for c in ext if c.isalnum())[:3]
+    if stem and len(stem) <= 8 and len(ext3) <= 3 and stem == base and len(base) <= 8:
+        cand = f"{stem}.{ext3}"
+        if cand not in taken:
+            return cand
+    for n in range(1, 1000):
+        stem2 = (stem[:6] + "~" + str(n))[:8]
+        cand = f"{stem2}.{ext3}"
+        if cand not in taken and len(stem2) >= 2:
+            return cand
+    raise SystemExit("не удалось собрать короткое имя 8.3 для " + name)
+
+
+def _lfn_entries(short11: bytes, name: str) -> list[bytes]:
+    """Записи длинного имени (по 13 символов UTF-16), в порядке, как их ждёт Windows:
+    сначала последний кусок со старшим битом в номере, затем остальные, затем сам файл."""
+    u = name.encode("utf-16-le")
+    chars = [u[i:i + 2] for i in range(0, len(u), 2)]
+    chunks = [chars[i:i + 13] for i in range(0, len(chars), 13)] or [[]]
+    if len(chunks) > 20:
+        raise SystemExit("слишком длинное имя для FAT: " + name)
+    chk = _lfn_checksum(short11)
+    slots = [1, 3, 5, 7, 9, 14, 16, 18, 20, 22, 24, 28, 30]     # 13 позиций по 2 байта
+    out: list[bytes] = []
+    total = len(chunks)
+    for idx, chunk in enumerate(reversed(chunks)):
+        seq = total - idx
+        if idx == 0:
+            seq |= 0x40
+        e = bytearray(32)
+        e[0] = seq
+        e[11] = 0x0F                      # атрибут: это запись длинного имени
+        e[12] = 0x00
+        e[13] = chk
+        for i, off in enumerate(slots):
+            if i < len(chunk):
+                pair = chunk[i]
+            elif i == len(chunk):
+                pair = b"\x00\x00"        # конец имени
+            else:
+                pair = b"\xFF\xFF"        # добивка
+            e[off:off + 2] = pair
+        out.append(bytes(e))
+    return out
+
+
 def build(total_sectors: int, files: list[tuple[str, bytes]]) -> bytes:
     part_start = 1
     part_sectors = total_sectors - part_start
@@ -131,21 +189,33 @@ def build(total_sectors: int, files: list[tuple[str, bytes]]) -> bytes:
     struct.pack_into("<H", fat, 2, 0xFFFF)
     root = bytearray(root_sectors * SECTOR)
     next_cluster = 2
-    for idx, (name, content) in enumerate(files):
-        base, _, ext = name.upper().partition(".")
-        short = base.ljust(8)[:8].encode("ascii") + ext.ljust(3)[:3].encode("ascii")
+    entry_off = 0
+    taken: set[str] = set()
+    for name, content in files:
+        short = _short_name(name, taken)
+        taken.add(short)
+        base, _, ext = short.partition(".")
+        short11 = base.ljust(8)[:8].encode("ascii") + ext.ljust(3)[:3].encode("ascii")
         n = max(1, (len(content) + SECTOR - 1) // SECTOR)
         for i in range(n):
             cl = next_cluster + i
             struct.pack_into("<H", fat, cl * 2, 0xFFFF if i == n - 1 else cl + 1)
             start = vol + (data_start + cl - 2) * SECTOR
             img[start:start + SECTOR] = content[i * SECTOR:(i + 1) * SECTOR].ljust(SECTOR, b"\x00")
-        off = idx * 32
-        root[off:off + 11] = short
+        # длинное имя: записи LFN идут перед записью файла (только если имя не влезает в 8.3)
+        if short != name.upper() or name != name.upper():
+            for e in _lfn_entries(short11, name):
+                root[entry_off:entry_off + 32] = e
+                entry_off += 32
+        off = entry_off
+        root[off:off + 11] = short11
         root[off + 11] = 0x20
         struct.pack_into("<H", root, off + 26, next_cluster)
         struct.pack_into("<I", root, off + 28, len(content))
+        entry_off += 32
         next_cluster += n
+    if entry_off > len(root):
+        raise SystemExit("записи каталога не влезли в корневой каталог образа")
 
     for i in range(2):
         start = vol + (1 + i * fat_sectors) * SECTOR
@@ -167,11 +237,21 @@ def build(total_sectors: int, files: list[tuple[str, bytes]]) -> bytes:
 
 # --------------------------------------------------------------- checking the result
 
-def read_root_entries(img: bytes) -> list[tuple[str, int]]:
-    """(имя, размер) файлов из корневого каталога тома в образе — для проверки сборки.
+def _lfn_name(entries: list[bytes]) -> str:
+    """Собрать длинное имя из записей LFN: они лежат в каталоге в обратном порядке."""
+    parts: dict[int, str] = {}
+    for e in entries:
+        seq = e[0] & 0x1F
+        parts[seq] = "".join(
+            e[o:o + 2].decode("utf-16-le", "replace")
+            for o in [1, 3, 5, 7, 9, 14, 16, 18, 20, 22, 24, 28, 30]
+        )
+    name = "".join(parts[k] for k in sorted(parts))
+    return name.split("\x00")[0].replace("\uffff", "")
 
-    Размер берётся из записи каталога, поэтому цепочки FAT здесь не нужны.
-    """
+
+def _root_dir(img: bytes) -> tuple[int, int, int]:
+    """(смещение корневого каталога, число записей, смещение тома) в образе."""
     bs = img[:SECTOR]
     pstart = struct.unpack_from("<I", bs, 0x1BE + 8)[0] if bs[0x1BE + 4] else 0
     vol = pstart * SECTOR
@@ -180,16 +260,31 @@ def read_root_entries(img: bytes) -> list[tuple[str, int]]:
     nfats = vbs[16]
     fat_sectors = struct.unpack_from("<H", vbs, 22)[0]
     entries = struct.unpack_from("<H", vbs, 17)[0]
-    root = vol + (reserved + nfats * fat_sectors) * SECTOR
+    return vol + (reserved + nfats * fat_sectors) * SECTOR, entries, vol
+
+
+def read_root_entries(img: bytes) -> list[tuple[str, int]]:
+    """(имя, размер) файлов из корневого каталога — имя длинное, если оно записано.
+
+    Размер берётся из записи каталога, поэтому цепочки FAT здесь не нужны.
+    """
+    root, entries, _vol = _root_dir(img)
     out: list[tuple[str, int]] = []
+    pending: list[bytes] = []
     for i in range(entries):
         ent = img[root + i * 32: root + i * 32 + 32]
         if ent[0] in (0x00, 0xE5):
             break
-        if ent[11] & 0x08:
+        if ent[11] == 0x0F:                     # запись длинного имени
+            pending.append(ent)
             continue
-        name = ent[:8].decode("ascii", "replace").rstrip() + "." + \
-               ent[8:11].decode("ascii", "replace").rstrip()
+        if ent[11] & 0x08:                      # метка тома и прочее служебное
+            pending = []
+            continue
+        short = ent[:8].decode("ascii", "replace").rstrip() + "." + \
+                ent[8:11].decode("ascii", "replace").rstrip()
+        name = _lfn_name(pending) if pending else short
+        pending = []
         out.append((name, struct.unpack_from("<I", ent, 28)[0]))
     return out
 
@@ -197,29 +292,37 @@ def read_root_entries(img: bytes) -> list[tuple[str, int]]:
 def read_file(img: bytes, name: str) -> bytes | None:
     """Прочитать файл из тома в образе — целиком, побайтово (проверка сборки).
 
-    Один размер из записи каталога ничего не доказывает: файл может оказаться в образе
-    обрезанным или собранным из чужих кластеров. Поэтому идём по цепочке FAT16 и сверяем
-    содержимое с исходником. Геометрию берём из загрузочного сектора тома, а не константами.
+    Имя ищется и как длинное (записи LFN), и как короткое 8.3. Один размер из записи
+    каталога ничего не доказывает: файл может оказаться обрезанным или собранным из
+    чужих кластеров, поэтому идём по цепочке FAT16 и сверяем содержимое с исходником.
+    Геометрию берём из загрузочного сектора тома, а не константами.
     """
-    bs = img[:SECTOR]
-    pstart = struct.unpack_from("<I", bs, 0x1BE + 8)[0] if bs[0x1BE + 4] else 0
-    vol = pstart * SECTOR
+    root, entries, vol = _root_dir(img)
     vbs = img[vol:vol + SECTOR]
     reserved = struct.unpack_from("<H", vbs, 14)[0]
     nfats = vbs[16]
     fat_sectors = struct.unpack_from("<H", vbs, 22)[0]
-    entries = struct.unpack_from("<H", vbs, 17)[0]
+    entry_count = struct.unpack_from("<H", vbs, 17)[0]
     spc = vbs[13] or 1
-    root = vol + (reserved + nfats * fat_sectors) * SECTOR
-    data = root + (entries * 32 + SECTOR - 1) // SECTOR * SECTOR
+    data = root + (entry_count * 32 + SECTOR - 1) // SECTOR * SECTOR
     fat = vol + reserved * SECTOR
-    base, _, ext = name.upper().partition(".")
-    short = base.ljust(8)[:8] + ext.ljust(3)[:3]
+    want = name.lower()
+    pending: list[bytes] = []
     for i in range(entries):
         ent = img[root + i * 32: root + i * 32 + 32]
         if ent[0] in (0x00, 0xE5):
             break
-        if ent[11] & 0x08 or ent[:11].decode("ascii", "replace") != short:
+        if ent[11] == 0x0F:
+            pending.append(ent)
+            continue
+        if ent[11] & 0x08:
+            pending = []
+            continue
+        short = ent[:8].decode("ascii", "replace").rstrip() + "." + \
+                ent[8:11].decode("ascii", "replace").rstrip()
+        long_name = _lfn_name(pending) if pending else short
+        pending = []
+        if long_name.lower() != want and short.lower() != want:
             continue
         size = struct.unpack_from("<I", ent, 28)[0]
         cl = struct.unpack_from("<H", ent, 26)[0]

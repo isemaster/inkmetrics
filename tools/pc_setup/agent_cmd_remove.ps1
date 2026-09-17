@@ -1,23 +1,23 @@
 # remove.ps1 - part of deinstall.cmd: remove the agent from this PC.
 #
-# Run by deinstall.cmd with administrator rights. It:
+# The monitor-only design has no internet sharing, so removal is short:
 #   1. stops the running agent;
-#   2. unregisters the tasks "inkmetrics agent" and "inkmetrics ICS";
-#   3. turns internet sharing off for the device adapter (ics.ps1 -Off) if ics.ps1 is at hand;
+#   2. unregisters the task "inkmetrics agent" (and the old "inkmetrics ICS", if any);
+#   3. gives the device adapter address back to DHCP (unless -KeepNet);
 #   4. reports what is left; the caller (deinstall.cmd) then deletes the install folder.
 #
 # ASCII ONLY: PowerShell 5.1 reads .ps1 in the system codepage, Russian text breaks parsing.
-param([switch]$DryRun, [string]$InstallDir = '')
+param([switch]$DryRun, [switch]$KeepNet, [string]$InstallDir = '')
 $ErrorActionPreference = 'Continue'
 
 if (-not $InstallDir) { $InstallDir = Join-Path $env:ProgramData 'inkmetrics' }
 $Here = Split-Path -Parent $MyInvocation.MyCommand.Path
-$Ics  = Join-Path $Here 'ics.ps1'
-if (-not (Test-Path $Ics)) { $Ics = Join-Path $InstallDir 'ics.ps1' }
+$Net  = Join-Path $Here 'net.ps1'
+if (-not (Test-Path $Net)) { $Net = Join-Path $InstallDir 'net.ps1' }
 
 function Say($m) { Write-Host ('  ' + $m) }
 
-Say ('install folder : ' + $InstallDir + '  (' + (Test-Path $InstallDir) + ')')
+Say ('install folder : ' + $InstallDir + '  (present: ' + (Test-Path $InstallDir) + ')')
 foreach ($tn in @('inkmetrics agent', 'inkmetrics ICS')) {
     $t = Get-ScheduledTask -TaskName $tn -ErrorAction SilentlyContinue
     if ($t) { Say ('task "' + $tn + '" : present (' + $t.State + ')') }
@@ -37,18 +37,17 @@ if (Test-Path $pidFile) {
 } else {
     Say 'agent process  : no agent.pid file'
 }
+if (-not $KeepNet) { Say 'address        : would go back to DHCP' }
 
 if ($DryRun) {
-    Say 'DRY RUN: would stop the agent, remove both tasks, turn the sharing off and delete the folder'
+    Say 'DRY RUN: would stop the agent, remove the task and give the address back to DHCP'
     exit 0
 }
 
 # ---------------------------------------------------------------- 1. stop the agent
 $stopped = 0
 $running = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
-             Where-Object { $_.ProcessId -ne $PID -and
-                            ($_.CommandLine -like ('*' + $InstallDir + '\agent.ps1*') -or
-                             $_.CommandLine -like ('*' + $InstallDir + '\ics.ps1*')) })
+             Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -like ('*' + $InstallDir + '\agent.ps1*') })
 foreach ($r in $running) {
     try { Stop-Process -Id $r.ProcessId -Force -ErrorAction Stop; $stopped++ } catch { }
 }
@@ -58,18 +57,19 @@ Say ('stopped processes : ' + $stopped)
 foreach ($tn in @('inkmetrics agent', 'inkmetrics ICS')) {
     try {
         Unregister-ScheduledTask -TaskName $tn -Confirm:$false -ErrorAction Stop
-        Say ('task removed     : ' + $tn)
+        Say ('task removed      : ' + $tn)
     } catch {
-        Say ('task not present : ' + $tn)
+        Say ('task not present  : ' + $tn)
     }
 }
 
-# ---------------------------------------------------------------- 3. sharing off
-if (Test-Path $Ics) {
-    Say 'turning internet sharing off:'
-    & powershell -NoProfile -ExecutionPolicy Bypass -File $Ics -Off -Quiet -NoPause
+# ---------------------------------------------------------------- 3. address back to DHCP
+if ($KeepNet) {
+    Say 'address           : left as is (-KeepNet)'
+} elseif (Test-Path $Net) {
+    & powershell -NoProfile -ExecutionPolicy Bypass -File $Net -Restore -Quiet
 } else {
-    Say 'ics.ps1 not found - sharing was not touched (turn it off by hand if it is on)'
+    Say 'net.ps1 not found - set the device adapter back to DHCP by hand if you need to'
 }
 Say 'done.'
 exit 0

@@ -5,12 +5,12 @@
 #
 # What is checked, in this order:
 #   1. device on USB (VID_303A = Espressif)
-#   2. the device disk: volume label INKMETRICS, its files, the required five
+#   2. the device disk: volume with the kit, its files, the required two
 #   3. installed agent: C:\ProgramData\inkmetrics - files, agent.log, log totals
-#   4. scheduled tasks: "inkmetrics agent" (metrics) and "inkmetrics ICS" (sharing)
+#   4. the scheduled task "inkmetrics agent" (the old "inkmetrics ICS" must be gone)
 #   5. the agent process itself
-#   6. device address: ARP by the device MAC, then 192.168.7.1 and 192.168.137.1
-#   7. the metrics path: HTTP /api/state and whether the device really receives samples.
+#   6. the address on the device link (must be 192.168.7.2, no gateway)
+#   7. the device address and the metrics path: HTTP /api/state, ingest.count and age
 #      By default the check only READS: it looks at ingest.count and ingest.age. With -Probe it
 #      also sends one synthetic sample (CPU/RAM 0) to prove the POST path - note that the device
 #      shows that probe on its screen until the real agent overwrites it, so do not read those
@@ -76,7 +76,7 @@ if ($pnp.Count -gt 0) {
 # The label alone is not enough: Windows can bind a stale "floppy" node and show no volume,
 # or mount the volume without a label. So we look for a drive that really carries the kit.
 $disk = ''
-$required = @('SETUP.CMD', 'MINSTALL.PS1', 'METRICS.PS1', 'AGENT.PS1', 'ICS.PS1')
+$required = @('instagent.cmd', 'deinstall.cmd')
 $vols = @()
 try { $vols = @(Get-Volume -ErrorAction SilentlyContinue | Where-Object { $_.DriveLetter }) } catch { }
 foreach ($v in $vols) {
@@ -86,7 +86,7 @@ foreach ($v in $vols) {
         $names = @(Get-ChildItem ($letter + '\') -File -ErrorAction SilentlyContinue |
                    ForEach-Object { $_.Name })
     } catch { }
-    if (($names -contains 'SETUP.CMD') -and ($names -contains 'METRICS.PS1')) { $disk = $letter; break }
+    if ($names -contains 'instagent.cmd') { $disk = $letter; break }
 }
 if (-not $disk) {
     $labelled = @($vols | Where-Object { $_.FileSystemLabel -eq 'INKMETRICS' })
@@ -103,7 +103,7 @@ if ($disk) {
     $names = @($files | ForEach-Object { $_.Name })
     $missing = @($required | Where-Object { $names -notcontains $_ })
     if ($missing.Count -eq 0) {
-        Result 'disk carries the required files' 'OK' 'SETUP.CMD, MINSTALL.PS1, METRICS.PS1, AGENT.PS1, ICS.PS1'
+        Result 'disk carries the required files' 'OK' 'instagent.cmd, deinstall.cmd (+ two readme files)'
     } else {
         Result 'disk carries the required files' 'FAIL' ('missing: ' + ($missing -join ', '))
         Hint 'The disk holds an OLD image: flash the device with the current build (flash-kit\idf\flash.bat COMx).'
@@ -141,12 +141,12 @@ if (Test-Path $Dir) {
     Result 'agent installed' 'OK' ('C:\ProgramData\inkmetrics: ' + ($have -join ', '))
 
     # The kit must NOT live inside the install folder: the metrics agent is installed AS
-    # agent.ps1, and on Windows agent.ps1 and AGENT.PS1 (the sharing setup) are one and the
+    # agent.ps1, and a kit file with the same name would be one and the same file there:
     # same file - unpacking the kit there makes them overwrite each other.
-    $kitInside = (Test-Path (Join-Path $Dir 'MINSTALL.PS1')) -or (Test-Path (Join-Path $Dir 'SETUP.CMD'))
+    $kitInside = (Test-Path (Join-Path $Dir 'instagent.cmd')) -or (Test-Path (Join-Path $Dir 'deinstall.cmd'))
     if ($kitInside) {
         Result 'kit kept outside the install folder' 'FAIL' 'the kit itself lies in C:\ProgramData\inkmetrics'
-        Hint 'Move the kit out of C:\ProgramData\inkmetrics (a folder of its own, or the device disk). Inside it, agent.ps1 (metrics) and AGENT.PS1 (sharing) are the same file.'
+        Hint 'Move the kit out of C:\ProgramData\inkmetrics: install it from the device disk or from a folder of its own.'
     }
 
     $AgentFile = Join-Path $Dir 'agent.ps1'
@@ -159,14 +159,11 @@ if (Test-Path $Dir) {
             Result 'metrics agent file (agent.ps1)' 'OK' ($sz.ToString() + ' bytes, the metrics agent')
         } else {
             Result 'metrics agent file (agent.ps1)' 'FAIL' ('holds another script (' + $sz + ' bytes) - the metrics agent was overwritten')
-            Hint 'On Windows agent.ps1 (the metrics agent, written by MINSTALL.PS1) and AGENT.PS1 (the sharing setup, a kit file) are the SAME name. An older kit overwrote one with the other: run SETUP.CMD from the device disk again with the current kit.'
+            Hint 'An older kit overwrote the metrics agent with another script: run instagent.cmd from the device disk again.'
         }
     } else {
         Result 'metrics agent file (agent.ps1)' 'FAIL' 'missing: the task "inkmetrics agent" has nothing to start'
-        Hint 'agent.ps1 is written by MINSTALL.PS1 (copied from METRICS.PS1): run SETUP.CMD from the device disk again, as administrator.'
-    }
-    if (-not (Test-Path (Join-Path $Dir 'ICS.PS1'))) {
-        Result 'sharing script (ICS.PS1)' 'WARN' 'not in C:\ProgramData\inkmetrics: the task "inkmetrics ICS" has nothing to run'
+        Hint 'agent.ps1 is unpacked by instagent.cmd: run it from the device disk again, as administrator.'
     }
 
     if (Test-Path $log) {
@@ -189,22 +186,22 @@ if (Test-Path $Dir) {
         }
     } else {
         Result 'agent.log' 'FAIL' 'no log file: the agent has never started'
-        Hint 'No agent.log means METRICS.PS1 never ran: run SETUP.CMD from the device disk again (as administrator).'
+        Hint 'No agent.log means the agent never ran: run instagent.cmd from the device disk again (as administrator).'
     }
 } else {
-    Result 'agent installed' 'FAIL' 'no C:\ProgramData\inkmetrics: SETUP.CMD / MINSTALL.PS1 did not finish'
+    Result 'agent installed' 'FAIL' 'no C:\ProgramData\inkmetrics: instagent.cmd did not finish'
     if ($disk) {
         $names2 = @(Get-ChildItem ($disk + '\') -File -ErrorAction SilentlyContinue | ForEach-Object { $_.Name })
-        if ($names2 -notcontains 'MINSTALL.PS1') {
-            Hint 'The disk has no MINSTALL.PS1 at all: it is an old image, the metrics agent is not on it.'
+        if ($names2 -notcontains 'instagent.cmd') {
+            Hint 'The disk has no instagent.cmd at all: it is an old image of another design.'
         } else {
-            Hint 'The disk looks current: run SETUP.CMD from it again and press "Yes" on the UAC prompt.'
+            Hint 'The disk looks current: run instagent.cmd from it again and press "Yes" on the UAC prompt.'
         }
     }
 }
 
 # ---------------------------------------------------------------- 4. scheduled tasks
-foreach ($tn in @('inkmetrics agent', 'inkmetrics ICS')) {
+foreach ($tn in @('inkmetrics agent')) {
     $t = $null
     try { $t = Get-ScheduledTask -TaskName $tn -ErrorAction Stop } catch { }
     if ($t) {
@@ -216,7 +213,41 @@ foreach ($tn in @('inkmetrics agent', 'inkmetrics ICS')) {
         Result ('task "' + $tn + '"') 'OK' $note
     } else {
         Result ('task "' + $tn + '"') 'FAIL' 'not registered'
-        Hint ('Task "' + $tn + '" is missing: run SETUP.CMD from the device disk again (administrator).')
+        Hint ('Task "' + $tn + '" is missing: run instagent.cmd from the device disk again (administrator).')
+    }
+}
+$legacy = Get-ScheduledTask -TaskName 'inkmetrics ICS' -ErrorAction SilentlyContinue
+if ($legacy) {
+    Result 'old task "inkmetrics ICS"' 'WARN' 'still registered: sharing is not part of the monitor-only design'
+    Hint 'Remove the old task: deinstall.cmd removes it too, or schtasks /delete /tn "inkmetrics ICS" /f'
+}
+
+# ---------------------------------------------------------------- 5. address on the device link
+# Fixed addressing: the device is always 192.168.7.1, this PC must be 192.168.7.2 WITHOUT a
+# gateway on the device adapter. A gateway there means the host internet is routed into the
+# device - the classic "internet died when the device was plugged in".
+$devAdapters = @()
+try {
+    $devAdapters = @(Get-NetAdapter -IncludeHidden -ErrorAction SilentlyContinue | Where-Object {
+        $_.InterfaceDescription -like '*NDIS*' -or $_.InterfaceDescription -like '*RNDIS*' })
+} catch { }
+if ($devAdapters.Count -eq 0) {
+    Result 'device adapter (RNDIS)' 'WARN' 'not enumerated right now (is the device plugged in?)'
+} else {
+    foreach ($a in $devAdapters) {
+        $ips = @((Get-NetIPAddress -InterfaceIndex $a.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue).IPAddress)
+        $routes = @(Get-NetRoute -InterfaceIndex $a.ifIndex -AddressFamily IPv4 -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue)
+        $metric = (Get-NetIPInterface -InterfaceIndex $a.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue).InterfaceMetric
+        $got = if ($ips.Count) { $ips -join ', ' } else { 'none' }
+        if (($ips -contains '192.168.7.2') -and ($routes.Count -eq 0)) {
+            Result ('address on ' + $a.Name) 'OK' ($got + ', no gateway, metric ' + $metric)
+        } elseif ($ips -contains '192.168.7.2') {
+            Result ('address on ' + $a.Name) 'FAIL' ($got + ' but ' + $routes.Count + ' default route(s) on it')
+            Hint 'Remove the gateway from the device adapter: ipconfig /all will show it; run FIXUSB.PS1 or instagent.cmd (it sets the address without a gateway).'
+        } else {
+            Result ('address on ' + $a.Name) 'FAIL' ($got + ' (expected 192.168.7.2)')
+            Hint 'Run instagent.cmd (it sets 192.168.7.2 without a gateway) or FIXUSB.PS1.'
+        }
     }
 }
 
@@ -277,7 +308,7 @@ foreach ($line in ($arpText -split "`r?`n")) {
         if ($mac.StartsWith('70-04-1D') -or $mac.StartsWith('72-04-1D')) { $cands.Add($matches[1]) }
     }
 }
-foreach ($ip in @('192.168.7.1', '192.168.137.1')) { $cands.Add($ip) }
+foreach ($ip in @('192.168.7.1')) { $cands.Add($ip) }   # адрес прибора фиксированный
 
 $found = ''
 $foundState = $null
@@ -291,14 +322,9 @@ foreach ($ip in ($cands | Select-Object -Unique)) {
 }
 if ($found) {
     Result ('device answers at ' + $found) 'OK' 'HTTP /api/state'
-    if ($found -ne '192.168.7.1') {
-        Result 'agent target address' 'WARN' ('agent.ps1 posts to 192.168.7.1, the device answers at ' + $found)
-        Hint ('The agent sends to 192.168.7.1 while the device is at ' + $found +
-              ': with sharing (ICS) on, the device moves into the ICS subnet and the metrics never arrive (known gap, ISSUES Z-40).')
-    }
 } else {
     Result 'device answers by HTTP' 'FAIL' ('no answer from: ' + (($cands | Select-Object -Unique) -join ', '))
-    Hint 'Read the ADDR line on the device screen - that is its address; if the screen shows NET EMERGENCY, sharing (ICS) is off.'
+    Hint 'The device must answer at 192.168.7.1 (fixed address). Check the cable, the ADDR line on its screen and the address on the device adapter.'
 }
 
 # ---------------------------------------------------------------- 7. metrics path

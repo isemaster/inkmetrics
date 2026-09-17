@@ -39,54 +39,67 @@ TOOLS = ROOT / "tools"
 # Что во что заворачивается: payload-имя -> исходник
 INST_PAYLOADS = [
     ("agent.ps1", PS / "metrics_agent.ps1"),
-    ("ics.ps1",   TOOLS / "ics_enable.ps1"),
+    ("net.ps1",   PS / "agent_cmd_net.ps1"),
     ("setup.ps1", PS / "agent_cmd_setup.ps1"),
 ]
 DEINST_PAYLOADS = [
-    ("ics.ps1",    TOOLS / "ics_enable.ps1"),
+    ("net.ps1",    PS / "agent_cmd_net.ps1"),
     ("remove.ps1", PS / "agent_cmd_remove.ps1"),
 ]
 
 MARKER = "rem =====PAYLOAD:{name}====="
 
-DOC_RU = """ИНСТРУКЦИЯ: установка агента inkmetrics на компьютер
+DOC_RU = """ИНСТРУКЦИЯ: агент метрик inkmetrics (прибор работает как монитор)
 
 Что это
 -------
 Два файла командной строки, которые ставят и снимают агента на любом компьютере
 с Windows 10 или 11:
 
-    instagent.cmd   установка агента (метрики + раздача интернета прибору)
+    instagent.cmd   установка агента
     deinstall.cmd   удаление агента
 
-Код агента лежит ВНУТРИ этих файлов: рядом больше ничего не нужно, других файлов
-и установленных программ (Python, ESP-IDF, драйверов) они не требуют. Можно
-запускать из любой папки - с флешки, из сетевой папки, с рабочего стола.
+Код агента лежит ВНУТРИ этих файлов: рядом больше ничего не нужно, ни Python, ни
+ESP-IDF, ни драйверов. Запускать можно из любой папки - с флешки, из сетевой папки,
+с рабочего стола.
+
+Прибор работает как МОНИТОР: интернета у него нет и раздача интернета (ICS) в этом
+наборе не используется вообще. Это сделано намеренно - так вся схема проще.
+
+Адреса: всегда одни и те же
+---------------------------
+    прибор (на его экране, строка ADDR) : 192.168.7.1
+    этот компьютер, адаптер прибора      : 192.168.7.2/24
+
+Ничего искать и согласовывать не нужно: адреса фиксированные, агент всегда шлёт
+метрики на 192.168.7.1, а установщик ставит компьютеру 192.168.7.2.
+
+Важно: адрес ставится БЕЗ ШЛЮЗА и с метрикой 9000. Если Windows получит аренду от
+прибора вместе со шлюзом 192.168.7.1, то весь интернет компьютера уйдёт в прибор -
+внешний интернет на этом компьютере пропадёт. Установщик делает правильно сам, но
+если адрес ставите руками - шлюз указывать нельзя.
 
 Что именно ставится
 -------------------
     папка установки : C:\\ProgramData\\inkmetrics
     файлы           : agent.ps1   агент метрик (CPU, память, диск, пинг -> прибор)
-                      ics.ps1     раздача интернета прибору (ICS)
-                      setup.ps1   служебный, ставит задачи и запускает всё
+                      net.ps1     адрес на линии прибора (192.168.7.2 без шлюза)
+                      setup.ps1   служебный: ставит задачу и запускает агента
                       agent.log   журнал агента (создаёт сам агент)
-                      agent.pid   файл с номером процесса агента
+                      agent.pid   номер процесса агента
                       cpu.state   предыдущий замер CPU (чтобы считать проценты)
-    задачи          : "inkmetrics agent" - раз в минуту, от имени SYSTEM
-                      "inkmetrics ICS"   - при старте, при входе и раз в минуту
-    ничего в реестре, в автозагрузке или в службах не прописывается; сторонних
-    программ не устанавливается.
+    задача          : "inkmetrics agent" - при старте, при входе и раз в минуту,
+                      от имени SYSTEM
+    в реестр, в автозагрузку и в службы ничего не прописывается, сторонних
+    программ не устанавливается. Раздача интернета не включается.
 
 Установка (5 шагов)
 -------------------
 1. Подключить прибор к компьютеру USB-кабелем (напрямую в порт, без хаба).
 2. Запустить instagent.cmd двойным кликом. Появится запрос прав администратора -
-   согласиться ("Да"). Права нужны один раз, для регистрации задач.
-   ВАЖНО: если нужны именно метрики на приборе, запускайте с ключом --no-ics
-   (без раздачи интернета) - иначе раздача уведёт прибор в другую подсеть и метрики
-   не дойдут, подробности в разделе про ICS ниже.
-3. Дождаться строк "task ... registered" и "Agent installed". Окно само держится
-   открытым, прочитать его можно спокойно.
+   согласиться ("Да"). Права нужны один раз: для адреса адаптера и задачи.
+3. Дождаться строк "set : 192.168.7.2/24, no gateway", "task inkmetrics agent :
+   registered" и "Agent installed". Окно само держится открытым.
 4. Проверить на приборе: нажимать кнопку PWR, пока не появится страница HOST SYS
    (5/5). Там CPU, память, диск и возраст данных - числа должны совпадать с этим
    компьютером, возраст - десятки секунд.
@@ -97,154 +110,142 @@ DOC_RU = """ИНСТРУКЦИЯ: установка агента inkmetrics н�
 
    В журнале раз в минуту должны появляться строки "sent ok (cpu=..%)".
 
-Что агент делает и куда шлёт
-----------------------------
+Что агент делает
+----------------
 Раз в 60 секунд агент собирает метрики этого компьютера и отправляет их прибору
-запросом POST http://192.168.7.1/ingest. Прибор на странице HOST SYS показывает
-их и считает возраст: если данные старше 3 минут, помечает как STALE (устарело).
+запросом POST на http://192.168.7.1/ingest. Прибор показывает их на странице
+HOST SYS и считает возраст: данные старше 3 минут помечаются как STALE (устарело).
 
-Проверить канал руками можно так (из окна PowerShell):
+Проверить канал руками (в окне PowerShell):
 
-    curl.exe -s -X POST -H "Content-Type: application/json" -d "{\\"cpu_percent\\":50.0}" http://192.168.7.1/ingest
+    curl.exe -s -X POST -H 'Content-Type: application/json' -d '{"cpu_percent":50.0}' http://192.168.7.1/ingest
 
-Ответ "ok" и цифра 50 на экране прибора означают, что канал до прибора рабочий,
-и дело только в агенте.
-
-Раздача интернета (ICS) - что нужно знать
------------------------------------------
-Вместе с агентом включается раздача интернета (Internet Connection Sharing) для
-адаптера прибора: тогда прибор и всё, что за ним, выходят в интернет через этот
-компьютер. Windows часто сбрасывает раздачу (смена сети, перезагрузка), поэтому
-её каждую минуту поднимает вторая задача, "inkmetrics ICS".
-
-ВАЖНО, известное ограничение: когда раздача включена, адаптер прибора получает
-адрес 192.168.137.1, прибор переезжает в подсеть 192.168.137.x, а агент метрик
-по-прежнему отправляет данные на 192.168.7.1 - метрики в этом режиме на прибор
-НЕ приходят (у прибора при этом интернет есть). Пока это ограничение не снято,
-выбирайте одно из двух:
-
-    * нужны метрики      - ставить с ключом --no-ics: instagent.cmd --no-ics.
-                           Раздача в этом случае не включается и её задача не
-                           ставится; если раздача была включена раньше, выключить
-                           её: ICS.PS1 -Off (набор pc-setup) или снять галочку
-                           "Разрешить другим пользователям..." в свойствах
-                           адаптера прибора;
-    * нужен интернет     - ставить как есть (instagent.cmd), но метрик не ждать,
-                           пока прибор и агент не будут знать один адрес.
+Ответ "ok" и число 50 на экране прибора означают, что канал рабочий и дело только
+в агенте. Эти числа - проба: агент перезапишет их своим замером в течение минуты.
 
 Удаление
 --------
-Запустить deinstall.cmd двойным кликом (тоже спросит права администратора).
-Он останавливает агент, снимает обе задачи, выключает раздачу и удаляет папку
-C:\\ProgramData\\inkmetrics. Больше ничего на компьютере не трогается: ярлыки,
-реестр, службы и другие сетевые настройки остаются как были.
+Запустить deinstall.cmd двойным кликом (тоже спросит права администратора). Он
+останавливает агент, снимает задачу "inkmetrics agent", возвращает адаптеру прибора
+адрес по DHCP и удаляет папку C:\\ProgramData\\inkmetrics. Больше ничего не
+трогается: ярлыки, реестр, службы и прочие сетевые настройки остаются как были.
 
 Ключи и переменные
 ------------------
     instagent.cmd --dry-run    ничего не менять: распаковать файлы во временную
                                папку и показать, что было бы сделано
-    instagent.cmd --no-ics     поставить только агента метрик, без раздачи
-                               интернета (рекомендуется, если нужны метрики)
-    deinstall.cmd --dry-run    только показать состояние: задачи, процесс, папка
+    instagent.cmd --keep-net   не трогать адрес адаптера (адрес уже настроен)
+    deinstall.cmd --dry-run    только показать состояние: задача, процесс, папка
+    deinstall.cmd --keep-net   не возвращать адрес в DHCP
     EINK_INSTALL_DIR=путь      поставить агента в другую папку вместо
                                C:\\ProgramData\\inkmetrics (например для проверки)
 
-Порядок для проверки без последствий: instagent.cmd --dry-run, затем
-deinstall.cmd --dry-run.
+Безопасный порядок осмотра: instagent.cmd --dry-run, затем deinstall.cmd --dry-run.
 
 Если метрик нет - что смотреть по порядку
 -----------------------------------------
-1. Задачи: schtasks /query /tn "inkmetrics agent" - если задачи нет, установка
-   не дошла до конца, запустите instagent.cmd заново (с правами администратора).
+1. Задача: schtasks /query /tn "inkmetrics agent". Нет задачи - установка не
+   дошла: запустите instagent.cmd заново, с правами администратора.
 2. Журнал: type C:\\ProgramData\\inkmetrics\\agent.log
-       "agent started ... sent ok"        - всё работает;
-       "send error: время ожидания ..."   - агент жив, но прибор недоступен:
-                                            проверьте, подключён ли прибор и его
-                                            адрес (строка ADDR на экране);
+       "agent started ... sent ok"       - всё работает;
+       "send error: ..."                 - агент жив, но прибор недоступен:
+                                           проверьте кабель и адрес адаптера;
        файла нет                         - агент не запускается (см. пункт 1).
-3. Файл агента: type C:\\ProgramData\\inkmetrics\\agent.ps1 - первая строка
-   должна быть "agent.ps1 - host monitoring agent". Если там текст про
-   установку раздачи, значит агент затёрт старым набором: удалите
-   (deinstall.cmd) и поставьте заново этим файлом.
-4. Прибор: страница http://192.168.7.1/api/state, поле ingest (count и age).
-   count должен расти каждую минуту, age - секунды.
-5. Прошивка прибора: метрики принимает только 0.4.0 и новее (страница HOST SYS
-   и запрос /ingest). Версия видна на странице прибора и на его экране.
+3. Файл агента: type C:\\ProgramData\\inkmetrics\\agent.ps1 - первая строка должна
+   быть "agent.ps1 - host monitoring agent". Если там другой текст, файл подменён
+   старым набором: удалите (deinstall.cmd) и поставьте заново.
+4. Адрес: в окне PowerShell
+
+       Get-NetIPAddress -AddressFamily IPv4 | Where-Object InterfaceAlias -like '*NDIS*'
+
+   у адаптера прибора должно быть 192.168.7.2 и не должно быть шлюза по умолчанию
+   (Get-NetRoute -DestinationPrefix 0.0.0.0/0 - на нём ноль маршрутов). Если шлюз
+   есть - интернет компьютера уходит в прибор: уберите шлюз, оставьте только адрес.
+5. Прибор: страница http://192.168.7.1/api/state, поле ingest (count и age).
+   count растёт каждую минуту, age - секунды.
+6. Прошивка прибора: метрики принимает только 0.4.0 и новее (страница HOST SYS и
+   запрос /ingest). Версия показана на странице прибора и на его экране.
 
 Требования и ограничения
 ------------------------
 * Windows 10 или 11, права администратора на время установки.
 * Прибор подключён по USB; прошивка прибора 0.4.0 или новее.
+* Интернета у прибора нет по устройству: это монитор. Компьютер при этом сохраняет
+  свой интернет, потому что адрес на линии прибора ставится без шлюза.
 * Скрипты написаны латиницей намеренно: cmd.exe и PowerShell 5.1 при системной
-  кодировке портят русский текст в .cmd/.ps1, поэтому сообщения английские,
-  а подробности - в этом файле.
+  кодировке портят русский текст в .cmd/.ps1, поэтому сообщения английские, а
+  подробности - в этом файле.
 * macOS без сторонних драйверов сеть прибора не поднимет; на Linux скрипты
   Windows-only. Это инструмент для Windows.
-* Агент знает адрес прибора 192.168.7.1. Если прибор получил другой адрес
-  (например 192.168.137.x при включённой раздаче), метрики не дойдут - см.
-  раздел про ICS выше.
 
 Чего этот набор НЕ делает
 -------------------------
-Эти два файла решают ровно две задачи: метрики на прибор и (по желанию) раздача
-интернета. Для полной настройки компьютера под прибор иногда нужно ещё:
-
-* адрес сетевой карты хоста. В аварийном режиме прибор выдаёт адрес сам, и если
-  Windows получит его вместе со шлюзом 192.168.7.1, пропадёт интернет этого
-  компьютера. Правильный вариант - поставить адаптеру прибора адрес 192.168.7.2
-  без шлюза и метрику 9000: это делает FIXUSB.PS1 из набора pc-setup (ключ
-  -Restore вернёт как было), либо вручную в свойствах адаптера;
-* ремонт, если диск прибора не появился в Windows - FIXDISK.PS1 (набор pc-setup);
-* подробная проверка агента, прибора и сети с вердиктами - CHECK.CMD (набор pc-setup).
+* Не настраивает раздачу интернета прибору - её в этой схеме нет.
+* Не ремонтирует случай, когда Windows не показала диск прибора: для этого есть
+  FIXDISK.PS1 в папке pc-setup проекта.
+* Не делает подробную проверку агента, прибора и сети с вердиктами: это CHECK.CMD
+  из той же папки pc-setup.
+* Не меняет прошивку прибора.
 
 Файлы рядом
 -----------
-В этой папке лежат только эти два .cmd и две инструкции (русская и английская).
-Более полный набор для настройки компьютера - в папке pc-setup проекта
-(там же CHECK.CMD - подробная проверка агента, прибора и сети, и FIXDISK.PS1 -
-ремонт, если диск прибора не появился в Windows).
+В этой папке четыре файла: два .cmd и две инструкции (русская и английская).
+Ровно те же четыре файла лежат на диске прибора - его видно в Windows как обычный
+съёмный диск, и агента можно поставить прямо с него, ничего не копируя.
 """
 
-DOC_EN = """INSTRUCTIONS: installing the inkmetrics agent on a PC
+DOC_EN = """INSTRUCTIONS: the inkmetrics metrics agent (the device works as a monitor)
 
 What this is
 ------------
 Two command files that install and remove the agent on any Windows 10/11 PC:
 
-    instagent.cmd   install the agent (metrics + internet sharing for the device)
+    instagent.cmd   install the agent
     deinstall.cmd   remove the agent
 
-The agent code travels INSIDE these files: nothing else is needed next to them,
-no Python, no ESP-IDF, no drivers. They can be run from any folder - a USB stick,
-a network share, the desktop.
+The agent code travels INSIDE these files: nothing else is needed next to them, no
+Python, no ESP-IDF, no drivers. They can be run from any folder - a USB stick, a
+network share, the desktop.
+
+The device works as a MONITOR: it has no internet, and internet sharing (ICS) is not
+used in this set at all. That is deliberate - it keeps the whole scheme simple.
+
+Addresses: always the same
+--------------------------
+    device (the ADDR line on its screen)  : 192.168.7.1
+    this PC, device adapter               : 192.168.7.2/24
+
+Nothing has to be looked up or negotiated: the addresses are fixed, the agent always
+posts to 192.168.7.1, and the installer gives this PC 192.168.7.2.
+
+Important: the address is set WITHOUT a gateway and with metric 9000. If Windows takes
+a lease from the device together with the gateway 192.168.7.1, the host internet goes
+into the device and this PC loses its internet. The installer does it right; if you set
+the address by hand, do not fill in a gateway.
 
 What gets installed
 -------------------
     install folder : C:\\ProgramData\\inkmetrics
     files          : agent.ps1   the metrics agent (CPU, memory, disk, ping -> device)
-                     ics.ps1     internet sharing (ICS) for the device
-                     setup.ps1   helper: registers the tasks and starts everything
+                     net.ps1     the address on the device link (192.168.7.2, no gateway)
+                     setup.ps1   helper: registers the task and starts the agent
                      agent.log   agent journal (written by the agent itself)
                      agent.pid   the agent process id
                      cpu.state   previous CPU sample (needed to compute percents)
-    tasks          : "inkmetrics agent" - every minute, as SYSTEM
-                     "inkmetrics ICS"   - at startup, at logon, every minute
-    Nothing is added to the registry, to startup or to services; no third-party
-    software is installed.
+    task           : "inkmetrics agent" - at startup, at logon and every minute, as SYSTEM
+    Nothing is added to the registry, to startup or to services; no third-party software
+    is installed. Internet sharing is not enabled.
 
 Installation (5 steps)
 ----------------------
 1. Connect the device to the PC with a USB cable (directly to a port, no hub).
-2. Start instagent.cmd by double click. Windows asks for administrator rights -
-   accept ("Yes"). The rights are needed once, to register the tasks.
-   IMPORTANT: if you want the metrics on the device, start it with --no-ics (no
-   internet sharing) - otherwise sharing moves the device to another subnet and the
-   metrics never arrive; see the ICS section below.
-3. Wait for the lines "task ... registered" and "Agent installed". The window
-   stays open, so you can read it calmly.
-4. Check the device: press PWR until page HOST SYS (5/5). It shows CPU, memory,
-   disk and the age of the data - the numbers must match this PC and the age must
-   be tens of seconds.
+2. Start instagent.cmd by double click. Windows asks for administrator rights - accept
+   ("Yes"). The rights are needed once: for the adapter address and the task.
+3. Wait for "set : 192.168.7.2/24, no gateway", "task inkmetrics agent : registered"
+   and "Agent installed". The window stays open.
+4. Check the device: press PWR until page HOST SYS (5/5). It shows CPU, memory, disk
+   and the age of the data - the numbers must match this PC and the age must be tens
+   of seconds.
 5. Check on the PC (either):
 
        schtasks /query /tn "inkmetrics agent" /v /fo LIST
@@ -254,51 +255,32 @@ Installation (5 steps)
 
 What the agent does
 -------------------
-Every 60 seconds the agent collects this PC's metrics and sends them to the device
-with POST http://192.168.7.1/ingest. The device shows them on the HOST SYS page and
-tracks their age: data older than 3 minutes is marked STALE.
+Every 60 seconds the agent collects this PC's metrics and sends them to the device with
+POST http://192.168.7.1/ingest. The device shows them on the HOST SYS page and tracks
+their age: data older than 3 minutes is marked STALE.
 
 Manual channel test (from a PowerShell window):
 
-    curl.exe -s -X POST -H "Content-Type: application/json" -d "{\\"cpu_percent\\":50.0}" http://192.168.7.1/ingest
+    curl.exe -s -X POST -H 'Content-Type: application/json' -d '{"cpu_percent":50.0}' http://192.168.7.1/ingest
 
-An "ok" answer plus 50 on the device screen means the channel works and only the
-agent is in question.
-
-Internet sharing (ICS) - what you must know
--------------------------------------------
-Together with the agent, internet sharing is enabled for the device adapter: the
-device (and anything behind it) goes online through this PC. Windows drops sharing
-often (network change, reboot), so a second task "inkmetrics ICS" brings it back
-every minute.
-
-IMPORTANT, known limitation: while sharing is on, the device adapter becomes
-192.168.137.1 and the device moves into the 192.168.137.x subnet, while the metrics
-agent still posts to 192.168.7.1 - in that mode metrics do NOT arrive (the device
-does have internet). Until this is fixed, pick one:
-
-    * you want metrics   - install with --no-ics: instagent.cmd --no-ics. Sharing
-                           is then neither turned on nor scheduled; if it was on
-                           before, turn it off: ICS.PS1 -Off (pc-setup set) or
-                           clear "Allow other users..." in the properties of the
-                           device adapter;
-    * you want internet  - install as is (instagent.cmd) and do not expect metrics
-                           until the device and the agent use the same address.
+An "ok" answer plus 50 on the device screen means the channel works and only the agent is
+in question. Those numbers are a probe: the agent overwrites them with a real sample
+within a minute.
 
 Removal
 -------
-Run deinstall.cmd by double click (it asks for administrator rights too). It stops
-the agent, removes both tasks, turns sharing off and deletes
-C:\\ProgramData\\inkmetrics. Nothing else on the PC is touched: shortcuts, the
+Run deinstall.cmd by double click (it asks for administrator rights too). It stops the
+agent, removes the task "inkmetrics agent", gives the device adapter address back to
+DHCP and deletes C:\\ProgramData\\inkmetrics. Nothing else is touched: shortcuts, the
 registry, services and other network settings stay as they were.
 
 Switches and variables
 ----------------------
-    instagent.cmd --dry-run    change nothing: unpack into a temporary folder and
-                               show what would be done
-    instagent.cmd --no-ics     install the metrics agent only, without internet
-                               sharing (recommended when you want the metrics)
-    deinstall.cmd --dry-run    only report the state: tasks, process, folder
+    instagent.cmd --dry-run    change nothing: unpack into a temporary folder and show
+                               what would be done
+    instagent.cmd --keep-net   do not touch the adapter address (already configured)
+    deinstall.cmd --dry-run    only report the state: task, process, folder
+    deinstall.cmd --keep-net   do not give the address back to DHCP
     EINK_INSTALL_DIR=path      install into another folder instead of
                                C:\\ProgramData\\inkmetrics (used for testing)
 
@@ -306,57 +288,54 @@ A safe way to look around: instagent.cmd --dry-run, then deinstall.cmd --dry-run
 
 No metrics - what to check, in order
 ------------------------------------
-1. Tasks: schtasks /query /tn "inkmetrics agent" - if the task is missing, the
-   installation did not finish; run instagent.cmd again (as administrator).
+1. Task: schtasks /query /tn "inkmetrics agent". If it is missing, the installation did
+   not finish: run instagent.cmd again as administrator.
 2. Journal: type C:\\ProgramData\\inkmetrics\\agent.log
        "agent started ... sent ok"      - all good;
-       "send error: ..."                - the agent runs but cannot reach the
-                                          device: check the cable and the device
-                                          address (ADDR line on its screen);
+       "send error: ..."                - the agent runs but cannot reach the device:
+                                          check the cable and the adapter address;
        no file at all                   - the agent never started (see item 1).
-3. Agent file: type C:\\ProgramData\\inkmetrics\\agent.ps1 - the first line must
-   read "agent.ps1 - host monitoring agent". If it is text about installing
-   sharing, an older kit overwrote the agent: remove it (deinstall.cmd) and
-   install again with this file.
-4. Device: http://192.168.7.1/api/state, the ingest block (count and age). count
-   must grow every minute, age must be seconds.
-5. Device firmware: only 0.4.0 and newer accepts metrics (the HOST SYS page and
-   the /ingest request). The version is shown on the device page and screen.
+3. Agent file: type C:\\ProgramData\\inkmetrics\\agent.ps1 - the first line must read
+   "agent.ps1 - host monitoring agent". Any other text means an older kit overwrote it:
+   remove it (deinstall.cmd) and install again.
+4. Address: in a PowerShell window
+
+       Get-NetIPAddress -AddressFamily IPv4 | Where-Object InterfaceAlias -like '*NDIS*'
+
+   the device adapter must be 192.168.7.2 and must have no default route
+   (Get-NetRoute -DestinationPrefix 0.0.0.0/0 - zero routes on it). A gateway there means
+   the host internet goes into the device: remove the gateway, keep only the address.
+5. Device: http://192.168.7.1/api/state, the ingest block (count and age). count must
+   grow every minute, age must be seconds.
+6. Device firmware: only 0.4.0 and newer accepts metrics (the HOST SYS page and the
+   /ingest request). The version is shown on the device page and screen.
 
 Requirements and limitations
 ----------------------------
 * Windows 10 or 11, administrator rights during the installation.
 * The device connected over USB; device firmware 0.4.0 or newer.
-* The scripts are ASCII on purpose: cmd.exe and PowerShell 5.1 mangle Russian
-  text in .cmd/.ps1 files under the system codepage, so messages are English and
-  the details live in this file.
-* macOS will not bring the device network up without extra drivers; on Linux the
-  scripts are Windows-only. This is a Windows tool.
-* The agent knows the device address 192.168.7.1. If the device got another
-  address (for example 192.168.137.x with sharing on), metrics will not arrive -
-  see the ICS section above.
+* The device has no internet by design: it is a monitor. This PC keeps its own internet
+  because the address on the device link is set without a gateway.
+* The scripts are ASCII on purpose: cmd.exe and PowerShell 5.1 mangle Russian text in
+  .cmd/.ps1 files under the system codepage, so messages are English and the details
+  live in this file.
+* macOS will not bring the device network up without extra drivers; on Linux the scripts
+  are Windows-only. This is a Windows tool.
 
 What this set does NOT do
 -------------------------
-These two files do exactly two things: metrics on the device and (optionally)
-internet sharing. A full setup of a PC for the device may also need:
-
-* the host adapter address. In emergency mode the device hands out addresses itself,
-  and if Windows takes the lease together with the gateway 192.168.7.1, this PC
-  loses its internet. The right way is to give the device adapter the address
-  192.168.7.2 with no gateway and metric 9000 - that is what FIXUSB.PS1 from the
-  pc-setup set does (-Restore puts it back), or do it by hand in the adapter
-  properties;
-* a repair when Windows does not show the device disk - FIXDISK.PS1 (pc-setup set);
-* a detailed check of the agent, the device and the network with verdicts -
-  CHECK.CMD (pc-setup set).
+* It does not set up internet sharing for the device - there is none in this scheme.
+* It does not repair the case when Windows shows no device disk: FIXDISK.PS1 in the
+  project folder pc-setup does that.
+* It does not run the detailed check of the agent, the device and the network with
+  verdicts: that is CHECK.CMD from the same pc-setup folder.
+* It does not touch the device firmware.
 
 Files nearby
 ------------
-This folder holds only these two .cmd files and the two instructions (Russian and
-English). A fuller PC setup set lives in the project folder pc-setup (it also has
-CHECK.CMD - a detailed check of the agent, the device and the network - and
-FIXDISK.PS1, which repairs Windows not showing the device disk).
+This folder holds four files: the two .cmd files and the two instructions (Russian and
+English). Exactly the same four files sit on the device disk, which Windows shows as an
+ordinary removable drive - the agent can be installed right from it, nothing to copy.
 """
 
 DOCS = [
@@ -383,17 +362,16 @@ rem
 rem  What it installs into C:\ProgramData\inkmetrics (change the folder with the
 rem  environment variable EINK_INSTALL_DIR if you need to):
 rem      agent.ps1  the metrics agent: CPU / memory / disk / ping -> the device, every minute
-rem      ics.ps1    keeps internet sharing (ICS) on for the device adapter
-rem      setup.ps1  registers both tasks and starts everything
-rem  Tasks: "inkmetrics agent" and "inkmetrics ICS" - as SYSTEM, at startup, at
-rem  logon and every minute.
+rem      net.ps1    the fixed address on the device link (192.168.7.2, no gateway)
+rem      setup.ps1  registers the task and starts everything
+rem  Task: "inkmetrics agent" - as SYSTEM, at startup, at logon and every minute.
+rem
+rem  The device is a MONITOR only: no internet sharing. The addresses are fixed -
+rem  the device is always 192.168.7.1, this PC gets 192.168.7.2 on the device adapter
+rem  (without a gateway, so the host internet never goes into the device).
 rem
 rem  Usage:   instagent.cmd              install (asks for administrator rights)
-rem           instagent.cmd --no-ics     install WITHOUT internet sharing: only the
-rem                                      metrics agent. Use this when you want the
-rem                                      numbers on the device: with sharing on the
-rem                                      device moves to 192.168.137.x and the agent,
-rem                                      which knows only 192.168.7.1, cannot reach it.
+rem           instagent.cmd --keep-net   do not touch the adapter address
 rem           instagent.cmd --dry-run    unpack into TEMP only, change nothing
 rem  Removal: deinstall.cmd
 rem
@@ -405,11 +383,11 @@ rem ============================================================================
 setlocal EnableExtensions
 set "SELF=%~f0"
 set "DRY="
-set "NOICS="
+set "KEEPNET="
 set "DIR="
 for %%A in (%*) do (
-    if /i "%%A"=="--dry-run" set "DRY=1"
-    if /i "%%A"=="--no-ics"  set "NOICS=1"
+    if /i "%%A"=="--dry-run"  set "DRY=1"
+    if /i "%%A"=="--keep-net" set "KEEPNET=1"
 )
 
 if defined EINK_INSTALL_DIR set "DIR=%EINK_INSTALL_DIR%"
@@ -417,10 +395,10 @@ if not defined DIR if defined DRY set "DIR=%TEMP%\inkmetrics-dry-run"
 if not defined DIR set "DIR=%ProgramData%\inkmetrics"
 
 echo.
-echo   inkmetrics: agent installer
+echo   inkmetrics: agent installer (device as a monitor)
 echo   install folder : %DIR%
 if defined DRY echo   mode           : DRY RUN - files go to TEMP, nothing is registered
-if defined NOICS echo   sharing (ICS)  : NOT installed - metrics only
+if defined KEEPNET echo   address        : left as is - the adapter is NOT touched
 echo.
 
 if not defined DRY (
@@ -460,14 +438,14 @@ for %%A in ("%DIR%\agent.ps1") do if %%~zA LSS 2000 (
 
 if defined DRY (
     echo.
-    echo   DRY RUN: would stop an old agent, register the tasks, turn the sharing on
-    echo   and start the agent. Nothing was changed.
+    echo   DRY RUN: would set the fixed address on the device adapter, stop an old agent,
+    echo   register the metrics task and start it. Nothing was changed.
     echo   Unpacked files are in "%DIR%" - delete that folder by hand.
     exit /b 0
 )
 
 set "SETUPARGS="
-if defined NOICS set "SETUPARGS=-NoIcs"
+if defined KEEPNET set "SETUPARGS=-KeepNet"
 
 echo.
 powershell -NoProfile -ExecutionPolicy Bypass -File "%DIR%\setup.ps1" %SETUPARGS%
@@ -479,8 +457,10 @@ if errorlevel 1 (
 )
 
 echo.
-echo   Agent installed. On the device press PWR until page 5/5 HOST SYS: the CPU and
-echo   memory numbers there must match this PC.
+echo   Agent installed. The device is used as a monitor: this PC is 192.168.7.2 on the
+echo   device link, the device is always 192.168.7.1.
+echo   On the device press PWR until page 5/5 HOST SYS: the CPU and memory numbers
+echo   there must match this PC.
 echo   Check this PC:   schtasks /query /tn "inkmetrics agent" /v /fo LIST
 echo                    type "%DIR%\agent.log"
 echo   Remove it again: deinstall.cmd
@@ -494,12 +474,13 @@ rem ============================================================================
 rem  deinstall.cmd - remove the inkmetrics agent from this PC.
 rem
 rem  Self-contained as well: the removal script travels inside this file, so it
-rem  works from any folder. It stops the agent, removes the tasks "inkmetrics
-rem  agent" and "inkmetrics ICS", turns internet sharing off and deletes the
-rem  install folder (C:\ProgramData\inkmetrics, or EINK_INSTALL_DIR if that is
-rem  set). Nothing else on this PC is touched.
+rem  works from any folder. It stops the agent, removes the task "inkmetrics
+rem  agent", gives the device adapter address back to DHCP and deletes the install
+rem  folder (C:\ProgramData\inkmetrics, or EINK_INSTALL_DIR if that is set).
+rem  Nothing else on this PC is touched.
 rem
 rem  Usage:   deinstall.cmd              remove everything (asks for admin rights)
+rem           deinstall.cmd --keep-net   keep the adapter address as it is
 rem           deinstall.cmd --dry-run    only report what is installed
 rem
 rem  ASCII only on purpose: cmd.exe renders Russian text from a UTF-8 .cmd as garbage.
@@ -509,10 +490,17 @@ rem ============================================================================
 setlocal EnableExtensions
 set "SELF=%~f0"
 set "DRY="
+set "KEEPNET="
 set "DIR="
-if /i "%~1"=="--dry-run" set "DRY=1"
+for %%A in (%*) do (
+    if /i "%%A"=="--dry-run"  set "DRY=1"
+    if /i "%%A"=="--keep-net" set "KEEPNET=1"
+)
 if defined EINK_INSTALL_DIR set "DIR=%EINK_INSTALL_DIR%"
 if not defined DIR set "DIR=%ProgramData%\inkmetrics"
+
+set "RARGS="
+if defined KEEPNET set "RARGS=-KeepNet"
 
 echo.
 echo   inkmetrics: agent removal
@@ -539,13 +527,13 @@ if errorlevel 1 (
 )
 
 if defined DRY (
-    powershell -NoProfile -ExecutionPolicy Bypass -File "%EINK_DIR%\remove.ps1" -DryRun -InstallDir "%DIR%"
+    powershell -NoProfile -ExecutionPolicy Bypass -File "%EINK_DIR%\remove.ps1" -DryRun -InstallDir "%DIR%" %RARGS%
     echo.
     echo   DRY RUN: nothing was changed.
     exit /b 0
 )
 
-powershell -NoProfile -ExecutionPolicy Bypass -File "%EINK_DIR%\remove.ps1" -InstallDir "%DIR%"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%EINK_DIR%\remove.ps1" -InstallDir "%DIR%" %RARGS%
 
 echo.
 if exist "%DIR%" (

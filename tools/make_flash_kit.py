@@ -95,7 +95,7 @@ rem into the application, so USB does not have to be replugged.
 
 echo.
 echo DONE. The device should start: screen shows DEVICE page, the PC gets a new disk
-echo and a network adapter. Then run pc-setup\\SETUP.CMD on this PC.
+echo and a network adapter. On that disk: instagent.cmd installs the agent,
 pause
 """
 
@@ -122,24 +122,18 @@ WHAT_TO_DO = """inkmetrics — прошивка прибора на этом к�
 Прибор отдаёт два устройства: сетевую карту и диск на 3,69 МБ. На диске лежат
 скрипты настройки — прибор приносит их с собой, ставить ничего заранее не нужно:
 
-    SETUP.CMD      двойной клик, подтвердить права администратора (один раз на ПК)
-    MINSTALL.PS1   ставит агента метрик (задание планировщика "inkmetrics agent") и
-                   передаёт управление AGENT.PS1; удалить: MINSTALL.PS1 -Remove
-    METRICS.PS1    сам агент метрик: раз в минуту шлёт данные на прибор (POST /ingest)
-    AGENT.PS1      настройка раздачи интернета прибору (ICS)
-    ICS.PS1        раздача интернета на адаптере прибора: -Off, -DryRun
-    NETCHECK.PS1   диагностика: адаптеры, мост, прибор, страница, раздача
-    FIXUSB.PS1     ремонт USB-сети (адрес прибору без шлюза, метрика 9000) — если пропал
-                   интернет или адаптер прибора завис; -Restore вернёт DHCP
-    READRU.TXT     инструкция по-русски
-    READMEEN.TXT   инструкция по-английски
+    instagent.cmd  двойной клик: ставит адрес 192.168.7.2 на адаптере прибора, задачу
+                   планировщика "inkmetrics agent" и запускает агента (нужны права админа)
+    deinstall.cmd  удаление: снимает задачу, возвращает адрес в DHCP, удаляет папку
+    README-RU.txt  подробная инструкция по-русски
+    README-EN.txt  то же по-английски
 
 Те же файлы лежат в этой папке в pc-setup\\ — можно запускать прямо отсюда, не с диска.
 
-После SETUP.CMD
----------------
-Адрес страницы прибора виден на его экране, строка ADDR (обычно 192.168.137.x).
-Страница состояния:  http://<адрес>/
+После установки агента
+---------------------
+Адрес прибора фиксированный: 192.168.7.1 (он же на его экране, строка ADDR).
+Страница состояния:  http://192.168.7.1/
 Настройки прибора:   http://<адрес>/setup   (поворот экрана, блокировка записи на диск,
                                               цель пинга в интернете)
 
@@ -162,7 +156,7 @@ WHAT_TO_DO = """inkmetrics — прошивка прибора на этом к�
 
 Если интернета у прибора нет
 ----------------------------
-Запустите pc-setup\\NETCHECK.PS1 и посмотрите строки про раздачу и адаптер прибора.
+Запустите pc-setup\\CHECK.CMD: он проверит прибор, диск, агента, задачу, адрес и метрики.
 Подробная инструкция по сети на ПК (раздача или мост, что делать при сбоях) лежит рядом:
 pc-setup\\GUIDE-RU.txt.
 
@@ -214,36 +208,33 @@ def main() -> int:
         shutil.copy2(src, KIT / name)
         print(f"  {name:<22} {src.stat().st_size:>9} Б")
 
-    # скрипты для ПК: те же, что уедут на диске прибора (источники — tools/pc_setup и tools/)
+    # скрипты для ПК: четыре файла с диска прибора (agent-kit) + диагностика из проекта
     pc_dst = KIT / "pc-setup"
     pc_dst.mkdir(exist_ok=True)
+    kit_files = ["instagent.cmd", "deinstall.cmd", "README-RU.txt", "README-EN.txt"]
+    for name in kit_files:
+        src = ROOT / "agent-kit" / name
+        if not src.exists():
+            print(f"нет файла для pc-setup: {src} — соберите: python tools/make_agent_kit.py")
+            return 1
+        shutil.copy2(src, pc_dst / name)
     for name, src in [
-        ("SETUP.CMD", ROOT / "firmware" / "media" / "SETUP.CMD"),   # выписывает make_setup_disk.py
-        ("MINSTALL.PS1", PC_SETUP_SRC / "metrics_install.ps1"),
-        ("METRICS.PS1", PC_SETUP_SRC / "metrics_agent.ps1"),
-        ("AGENT.PS1", PC_SETUP_SRC / "agent_install.ps1"),
-        ("ICS.PS1", ROOT / "tools" / "ics_enable.ps1"),
-        ("NETCHECK.PS1", ROOT / "tools" / "net_check2.ps1"),
-        ("CHECK.PS1", PC_SETUP_SRC / "check.ps1"),
         ("CHECK.CMD", PC_SETUP_SRC / "check.cmd"),
+        ("CHECK.PS1", PC_SETUP_SRC / "check.ps1"),
         ("FIXDISK.PS1", ROOT / "tools" / "reset_disk_node.ps1"),    # диск прибора не появился
         ("FIXUSB.PS1", ROOT / "tools" / "fix_usb_net.ps1"),        # ремонт USB-сети: адрес без шлюза
-        ("READRU.TXT", PC_SETUP_SRC / "README-RU.txt"),
-        ("READMEEN.TXT", PC_SETUP_SRC / "README-EN.txt"),
-        ("GUIDE-RU.txt", ROOT / "docs" / "pc-setup-bridge.md"),   # полная инструкция по сети на ПК
+        ("GUIDE-RU.txt", ROOT / "docs" / "pc-setup-bridge.md"),   # инструкция по сети на ПК
     ]:
         if not src.exists():
             print(f"нет файла для pc-setup: {src}")
             return 1
         shutil.copy2(src, pc_dst / name)
-    # READRU/READMEEN уезжают на прибор с BOM (make_setup_disk.read(..., bom=True) — Блокнот
-    # надёжнее читает UTF-8 с BOM). Копия в комплекте обязана совпасть с файлом на диске,
-    # иначе «те же файлы» перестают быть теми же: проверка хешей это ловит.
-    for name in ("READRU.TXT", "READMEEN.TXT"):
-        p = pc_dst / name
-        data = p.read_bytes()
-        if not data.startswith(b"\xef\xbb\xbf"):
-            p.write_bytes(b"\xef\xbb\xbf" + data)
+    # лишние файлы (от прежних наборов) убираем: в комплекте должен быть ровно этот набор
+    keep = set(kit_files) | {"CHECK.CMD", "CHECK.PS1", "FIXDISK.PS1", "FIXUSB.PS1", "GUIDE-RU.txt"}
+    for p in pc_dst.iterdir():
+        if p.is_file() and p.name not in keep:
+            p.unlink()
+            print(f"  убран устаревший {p.name}")
     print(f"  pc-setup/              {len(list(pc_dst.iterdir()))} файлов")
 
     (KIT / "flash.bat").write_bytes(
