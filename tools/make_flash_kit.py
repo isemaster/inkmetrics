@@ -225,6 +225,14 @@ def main() -> int:
             print(f"нет файла для pc-setup: {src}")
             return 1
         shutil.copy2(src, pc_dst / name)
+    # READRU/READMEEN уезжают на прибор с BOM (make_setup_disk.read(..., bom=True) — Блокнот
+    # надёжнее читает UTF-8 с BOM). Копия в комплекте обязана совпасть с файлом на диске,
+    # иначе «те же файлы» перестают быть теми же: проверка хешей это ловит.
+    for name in ("READRU.TXT", "READMEEN.TXT"):
+        p = pc_dst / name
+        data = p.read_bytes()
+        if not data.startswith(b"\xef\xbb\xbf"):
+            p.write_bytes(b"\xef\xbb\xbf" + data)
     print(f"  pc-setup/              {len(list(pc_dst.iterdir()))} файлов")
 
     (KIT / "flash.bat").write_bytes(

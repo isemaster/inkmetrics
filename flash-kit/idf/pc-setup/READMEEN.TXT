@@ -1,4 +1,4 @@
-inkmetrics - a desk device. What to do with this disk
+﻿inkmetrics - a desk device. What to do with this disk
 ======================================================
 
 This disk IS the device. The device also presents itself as a network card: its page
