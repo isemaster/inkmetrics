@@ -185,6 +185,92 @@ static void show_host(const screen_state_t *st)
     line(176, "ME %s", st->dev_ip ? st->dev_ip : "-");
 }
 
+/* ------------------------------------------- страница 4: метрики хоста (агент) */
+/* Значения «н/д» (агент не прислал поле) показываем честно как N/A, а не нулём:
+   ноль и «неизвестно» — разные вещи, и по экрану это должно быть видно. */
+static void show_metrics(const screen_state_t *st)
+{
+    header("HOST SYS", 4);
+
+    if (!st->metrics_have) {
+        line(22, "NO DATA");
+        line(44, "START AGENT");
+        line(66, "POST /INGEST");
+        line(88, "HOST %s", st->host_ip ? st->host_ip : "-");
+        line(110, "ME %s", st->dev_ip ? st->dev_ip : "-");
+        line(132, "FW %s", st->fw ? st->fw : "-");
+        line(154, "WEB /INGEST");
+        line(176, "PWR PAGE");
+        return;
+    }
+
+    /* CPU и RAM в одну строку: собираем части заранее, чтобы «н/д» выглядело как N/A,
+       а не как пустое место */
+    char cpu_s[8], mem_s[8];
+    if (st->cpu_pct >= 0) {
+        snprintf(cpu_s, sizeof(cpu_s), "%.0f%%", (double)st->cpu_pct);
+    } else {
+        snprintf(cpu_s, sizeof(cpu_s), "N/A");
+    }
+    if (st->mem_pct >= 0) {
+        snprintf(mem_s, sizeof(mem_s), "%.0f%%", (double)st->mem_pct);
+    } else {
+        snprintf(mem_s, sizeof(mem_s), "N/A");
+    }
+    line(22, "CPU %s RAM %s", cpu_s, mem_s);
+
+    if (st->disk_pct >= 0) {
+        line(44, "DSK %3.0f%%", (double)st->disk_pct);
+    } else {
+        line(44, "DSK N/A");
+    }
+
+    if (st->gpu_pct >= 0) {
+        if (st->gpu_temp_c >= 0) {
+            line(66, "GPU %3.0f%% %dC", (double)st->gpu_pct, st->gpu_temp_c);
+        } else {
+            line(66, "GPU %3.0f%%", (double)st->gpu_pct);
+        }
+    } else {
+        line(66, "GPU N/A");
+    }
+
+    if (st->cpu_temp_c >= 0) {
+        line(88, "TMP %dC SMART %s", st->cpu_temp_c,
+             st->smart && st->smart[0] ? st->smart : "-");
+    } else {
+        line(88, "TMP N/A SMART %s", st->smart && st->smart[0] ? st->smart : "-");
+    }
+
+    if (st->hping_ok) {
+        line(110, "PING %u MS", (unsigned)st->hping_ms);
+    } else {
+        line(110, "PING NO ANSWER");
+    }
+
+    if (st->tcp_ok) {
+        line(132, "TCP %u", (unsigned)st->tcp_est);
+    } else {
+        line(132, "TCP N/A");
+    }
+
+    if (st->hup_ok && st->hup_h >= 0) {
+        uint32_t total_min = (uint32_t)(st->hup_h * 60.0f);
+        line(154, "UP %uD %02u:%02u", (unsigned)(total_min / 1440u),
+             (unsigned)((total_min % 1440u) / 60u), (unsigned)(total_min % 60u));
+    } else {
+        line(154, "UP N/A");
+    }
+
+    /* Возраст данных: по нему сразу видно, живы ли метрики. Устаревшие помечаем. */
+    if (st->metrics_fresh) {
+        line(176, "AGE %u S %s", (unsigned)st->metrics_age_s,
+             st->metrics_host && st->metrics_host[0] ? st->metrics_host : "");
+    } else {
+        line(176, "AGE %u S STALE", (unsigned)st->metrics_age_s);
+    }
+}
+
 /* ------------------------------------------------------- страница 3: настройки */
 static void show_settings(const screen_state_t *st)
 {
@@ -216,6 +302,9 @@ void screen_show(const screen_state_t *st, int page)
         break;
     case 3:
         show_settings(st);
+        break;
+    case 4:
+        show_metrics(st);
         break;
     default:
         show_device(st);

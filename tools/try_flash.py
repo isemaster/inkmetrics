@@ -31,11 +31,22 @@ DEFAULT_IMAGES = [
     ("0x20000", "inkmetrics_idf.bin"),
 ]
 
-# Диск хоста (раздел msc, см. partitions.csv): образ собирает tools/make_setup_disk.py.
-# На диске лежат SETUP.CMD и скрипты настройки ПК — прибор приносит их с собой.
+# Диск хоста (раздел msc): образ собирает tools/make_setup_disk.py (сейчас это
+# firmware/media/setup-disk-big.img, 7552 сектора = 3,69 МБ). На диске лежат SETUP.CMD и
+# скрипты настройки ПК — прибор приносит их с собой.
+# Адрес и размер раздела берём из idf/partitions.csv (tools/partitions.py), а не константой:
+# раньше тут стоял 0x670000 со старым образом на 1,44 МБ, и прошивка писала диск в СЕРЕДИНУ
+# нового раздела msc (0x430000 + 0x3B0000), затирая половину диска.
 # Отключается ключом --no-disk (если на диске есть чужие файлы, их не затираем).
-MSC_DISK_OFFSET = 0x670000
-MSC_DISK_IMAGE = ROOT / "firmware" / "media" / "setup-disk.img"
+MSC_DISK_IMAGE = ROOT / "firmware" / "media" / "setup-disk-big.img"
+
+sys.path.insert(0, str(HERE))
+import partitions as flash_layout                                # noqa: E402
+
+
+def msc_partition() -> tuple[int, int]:
+    """(адрес, размер) раздела msc из idf/partitions.csv."""
+    return flash_layout.msc_partition(ROOT / "idf" / "partitions.csv")
 
 
 def disk_image() -> Path | None:
@@ -45,6 +56,13 @@ def disk_image() -> Path | None:
         print(f"образа диска нет ({MSC_DISK_IMAGE}) — соберите: python tools/make_setup_disk.py",
               flush=True)
         return None
+    _off, size = msc_partition()
+    have = MSC_DISK_IMAGE.stat().st_size
+    if have != size:
+        print(f"ВНИМАНИЕ: образ диска {have} Б, а раздел msc {size} Б — образ и раскладка разошлись;"
+              f" пересоберите: python tools/make_setup_disk.py", flush=True)
+        if have > size:
+            return None
     return MSC_DISK_IMAGE
 
 
@@ -144,9 +162,15 @@ def main() -> int:
     flags, images = layout(build)
     disk = disk_image()
     if disk:
-        images = images + [(hex(MSC_DISK_OFFSET), str(disk))]
-        print(f"диск хоста: {disk.name} ({disk.stat().st_size} Б) → {hex(MSC_DISK_OFFSET)}", flush=True)
+        off, _size = msc_partition()
+        images = images + [(hex(off), str(disk))]
+        print(f"диск хоста: {disk.name} ({disk.stat().st_size} Б) → {hex(off)}", flush=True)
     print("образы: " + ", ".join(f"{a} {f}" for a, f in images), flush=True)
+
+    if "--dry-run" in sys.argv:
+        print("сухой прогон: ничего не прошиваю (--dry-run)", flush=True)
+        return 0
+
     archive_build(build)      # ELF и .map — рядом, иначе дамп паники не расшифровать
 
     for attempt in range(1, tries + 1):
@@ -163,7 +187,11 @@ def main() -> int:
                "--before", "default-reset", "--after", "no-reset",
                "--baud", "921600", "write-flash"] + flags + ["-z"]
         for addr, rel in images:
-            cmd += [addr, f"{build}/{rel}"]
+            # Образ диска задан абсолютным путём (MSC_DISK_IMAGE), остальные — относительно
+            # папки сборки. Раньше путь склеивался всегда, и esptool получал
+            # «D:/…/build/D:\…\setup-disk.img» — прошивка падала, не начавшись.
+            p = Path(rel)
+            cmd += [addr, str(p if p.is_absolute() else Path(build) / rel)]
         res = subprocess.run(cmd, capture_output=True, text=True)
         out = (res.stdout or "") + (res.stderr or "")
         if res.returncode == 0 and "Hash of data verified" in out:

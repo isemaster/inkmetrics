@@ -6,9 +6,15 @@
  * Тогда порядок на любом ПК один: воткнул прибор → появился диск → запустил `setup.cmd`.
  *
  * Устройство диска:
- *   * данные берём из раздела `msc` во флеше прибора (то же место, что диск Arduino-версии);
- *   * отдаём ровно 2880 секторов (1,44 МБ) — Windows не монтирует том без таблицы
- *     разделов больше этого (проверено, см. MEMORY.md, таблица ошибок);
+ *   * данные берём из раздела `msc` во флеше прибора (idf/partitions.csv);
+ *   * размер — 7552 сектора (3,69 МБ), ровно как раздел. Раньше было 2880 секторов
+ *     (1,44 МБ = геометрия дискеты 80×2×18), и Windows принимала прибор за дисковод
+ *     гибких дисков: класс FloppyDisk, служба sfloppy, буква A:, «Дискета (A:)».
+ *     Правка бита RMB в ответе INQUIRY и настоящая таблица разделов на это не влияли —
+ *     сработал именно размер. Теперь Windows заводит обычный съёмный диск с буквой;
+ *   * образ диска (MBR + раздел FAT16 с файлами) готовит tools/make_disk_image.py и
+ *     пишется в раздел через tools/flash_msc_image.py — размер образа должен совпадать
+ *     с MSC_SECTORS здесь и с размером раздела в partitions.csv;
  *   * диск на чтение И на запись; блокировка записи включается в настройках прибора
  *     (экран SETTINGS / веб-страница `/setup`) — при блокировке хост видит диск
  *     защищённым от записи (TinyUSB сообщает это сам, см. tud_msc_is_writable_cb).
@@ -24,7 +30,10 @@
 #include "tusb.h"
 
 #define MSC_PART_LABEL "msc"
-#define MSC_SECTORS    2880u          /* 1,44 МБ = 80*2*18 */
+#define MSC_SECTORS    7552u          /* 3,69 МБ = размер раздела msc (0x3B0000/512).
+                                         Было 2880 (дискета 1,44 МБ): ровно этот размер
+                                         Windows принимала за гибкий диск и вешала на
+                                         прибор драйвер sfloppy — «Дискета (A:)». */
 #define MSC_SECTOR     512u
 
 static const char *TAG = "msc";
@@ -104,19 +113,42 @@ bool tud_msc_test_unit_ready_cb(uint8_t lun)
 uint32_t tud_msc_inquiry2_cb(uint8_t lun, scsi_inquiry_resp_t *rsp, uint32_t bufsize)
 {
     (void)lun;
-    if (!rsp || bufsize < sizeof(scsi_inquiry_resp_t)) {
-        return 0;                     /* не хватило места — пусть отвечает старый колбэк */
+    static bool logged;
+    if (!logged) {
+        logged = true;
+        /* Сколько байт просит хост — важно знать: Windows сначала спрашивает коротко
+           (5 байт), и раньше мы на такой запрос отвечали нулём, а стек подставлял свой
+           ответ с битом «съёмный носитель» — отсюда «Дискета (A:)». */
+        diag_step("диск: INQUIRY от хоста, запрошено %u байт", (unsigned)bufsize);
     }
-    memset(rsp, 0, sizeof(*rsp));
-    rsp->peripheral_device_type = 0x00;   /* прямой доступ: обычный диск */
-    rsp->is_removable           = 0;      /* НЕ флоппи-гибкий: иначе Windows вешает sfloppy */
-    rsp->version                = 2;      /* SPC-2 */
-    rsp->response_data_format   = 2;
-    rsp->additional_length      = sizeof(scsi_inquiry_resp_t) - 5;
-    memcpy(rsp->vendor_id,   "inkmetrics ",     8);
-    memcpy(rsp->product_id,  "monitor disk", 12);
-    memcpy(rsp->product_rev, "1.0",          3);
-    return sizeof(scsi_inquiry_resp_t);
+    if (!rsp || bufsize < 5) {
+        return 0;                     /* даже заголовок не влез — отвечать нечем */
+    }
+
+    /* Ответ собираем целиком во временной структуре и отдаём столько, сколько просят.
+     * Так короткий запрос (заголовок на 5 байт) тоже получает наши поля, а не ответ
+     * стека: иначе хост видит is_removable = 1, который TinyUSB ставит сам
+     * (src/class/msc/msc_device.c), и Windows заводит прибор дисководом гибких дисков. */
+    scsi_inquiry_resp_t tmp;
+    memset(&tmp, 0, sizeof(tmp));
+    tmp.peripheral_device_type = 0x00;   /* прямой доступ: обычный диск */
+    /* Как у настоящей флешки: съёмный носитель — да (RMB=1). Пробовали ставить 0
+       (чтобы уйти от «дискеты») — класс Windows всё равно остался SFloppy, а носитель
+       вообще пропал из вида («устройство не готово»). Причиной оказался размер:
+       диск был ровно 2880 секторов = 1,44 МБ, то есть совпадал с геометрией дискеты. */
+    tmp.is_removable           = 1;
+    tmp.version                = 2;      /* SPC-2 */
+    tmp.response_data_format   = 2;
+    tmp.additional_length      = sizeof(scsi_inquiry_resp_t) - 5;
+    memcpy(tmp.vendor_id,   "inkmetrics ",     8);
+    memcpy(tmp.product_id,  "monitor drive", 13);   /* имя входит в ключ устройства:
+                                          смена заставляет Windows завести диск заново,
+                                          а не тянуть прежнюю классификацию из реестра */
+    memcpy(tmp.product_rev, "1.0",          3);
+
+    uint32_t n = (sizeof(tmp) < bufsize) ? (uint32_t)sizeof(tmp) : bufsize;
+    memcpy(rsp, &tmp, n);
+    return n;
 }
 void tud_msc_inquiry_cb(uint8_t lun, uint8_t vendor_id[8], uint8_t product_id[16],
                         uint8_t product_rev[4])

@@ -27,22 +27,30 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 BUILD = ROOT / "idf" / "build"
 KIT = ROOT / "flash-kit" / "idf"
-DISK_IMAGE = ROOT / "firmware" / "media" / "setup-disk.img"
+DISK_IMAGE = ROOT / "firmware" / "media" / "setup-disk-big.img"
 PC_SETUP_SRC = ROOT / "tools" / "pc_setup"
+
+# Адрес и размер раздела msc (диска хоста) берём из idf/partitions.csv: раньше здесь стоял
+# 0x670000 со старым образом на 1,44 МБ, и комплект шил диск в середину нового раздела.
+sys.path.insert(0, str(ROOT / "tools"))
+import partitions as flash_layout                                    # noqa: E402
+
+MSC_OFFSET, MSC_SIZE = flash_layout.msc_partition(ROOT / "idf" / "partitions.csv")
+DISK_NAME = DISK_IMAGE.name
 
 IMAGES = [
     ("0x0", "bootloader.bin", BUILD / "bootloader" / "bootloader.bin"),
     ("0x8000", "partition-table.bin", BUILD / "partition_table" / "partition-table.bin"),
     ("0xe000", "ota_data_initial.bin", BUILD / "ota_data_initial.bin"),
     ("0x20000", "inkmetrics_idf.bin", BUILD / "inkmetrics_idf.bin"),
-    ("0x670000", "setup-disk.img", DISK_IMAGE),
+    (hex(MSC_OFFSET), DISK_NAME, DISK_IMAGE),
 ]
 
 FLASH_BAT = """@echo off
 rem inkmetrics (ESP-IDF build): firmware + host disk image.
 rem Usage: flash.bat COM5
 rem Put the board into bootloader first: hold BOOT, plug USB, keep 2 s, release.
-rem The disk image (setup-disk.img) contains SETUP.CMD - the device brings the PC
+rem The disk image contains SETUP.CMD - the device brings the PC
 rem setup scripts with it (see pc-setup folder for copies).
 rem ASCII only on purpose: cmd.exe renders Russian text from a UTF-8 .bat as garbage.
 setlocal
@@ -72,7 +80,7 @@ echo Flashing inkmetrics to %~1 ...
   0x8000   "%~dp0partition-table.bin" ^
   0xe000   "%~dp0ota_data_initial.bin" ^
   0x20000  "%~dp0inkmetrics_idf.bin" ^
-  0x670000 "%~dp0setup-disk.img"
+  __MSC__ "%~dp0__DISK__"
 if errorlevel 1 (
   echo.
   echo FAILED. Check the port and that the board is in bootloader mode ^(hold BOOT, plug USB^).
@@ -111,13 +119,18 @@ WHAT_TO_DO = """inkmetrics — прошивка прибора на этом к�
 
 Что происходит дальше (важно)
 -----------------------------
-Прибор отдаёт два устройства: сетевую карту и диск на 1,44 МБ. На диске лежат
+Прибор отдаёт два устройства: сетевую карту и диск на 3,69 МБ. На диске лежат
 скрипты настройки — прибор приносит их с собой, ставить ничего заранее не нужно:
 
     SETUP.CMD      двойной клик, подтвердить права администратора (один раз на ПК)
-    AGENT.PS1      ставит агента (C:\\ProgramData\\inkmetrics) и задание планировщика
+    MINSTALL.PS1   ставит агента метрик (задание планировщика "inkmetrics agent") и
+                   передаёт управление AGENT.PS1; удалить: MINSTALL.PS1 -Remove
+    METRICS.PS1    сам агент метрик: раз в минуту шлёт данные на прибор (POST /ingest)
+    AGENT.PS1      настройка раздачи интернета прибору (ICS)
     ICS.PS1        раздача интернета на адаптере прибора: -Off, -DryRun
     NETCHECK.PS1   диагностика: адаптеры, мост, прибор, страница, раздача
+    FIXUSB.PS1     ремонт USB-сети (адрес прибору без шлюза, метрика 9000) — если пропал
+                   интернет или адаптер прибора завис; -Restore вернёт DHCP
     READRU.TXT     инструкция по-русски
     READMEEN.TXT   инструкция по-английски
 
@@ -158,7 +171,10 @@ pc-setup\\GUIDE-RU.txt.
 Значит раздача ещё не включена. Прибор сам повторит попытку получить адрес в течение
 минуты — перезагружать его не нужно.
 
-> Прошивка 0.3.2-idf. Плата Waveshare ESP32-S3-ePaper-1.54 (8 МБ флеша).
+Метрики этого ПК (CPU, память, диск, пинг) видны на экране прибора: нажмите PWR, пока не
+появится страница HOST SYS (5/5). Данные старше 3 минут прибор помечает как STALE.
+
+> Прошивка 0.4.2-idf. Плата Waveshare ESP32-S3-ePaper-1.54 (8 МБ флеша).
 """
 
 
@@ -180,32 +196,40 @@ def main() -> int:
         return 1
 
     KIT.mkdir(parents=True, exist_ok=True)
+    # старый маленький образ (1,44 МБ: раздел msc был 0x170000) в комплекте только путает —
+    # теперь диск это setup-disk-big.img на 3,69 МБ, адрес в flash.bat
+    stale = KIT / "setup-disk.img"
+    if stale.exists():
+        stale.unlink()
+        print("  убран устаревший setup-disk.img (диск теперь setup-disk-big.img)")
     for _, name, src in IMAGES:
         shutil.copy2(src, KIT / name)
         print(f"  {name:<22} {src.stat().st_size:>9} Б")
 
-    # скрипты для ПК: те же, что уедут на диске прибора
+    # скрипты для ПК: те же, что уедут на диске прибора (источники — tools/pc_setup и tools/)
     pc_dst = KIT / "pc-setup"
     pc_dst.mkdir(exist_ok=True)
     for name, src in [
+        ("SETUP.CMD", ROOT / "firmware" / "media" / "SETUP.CMD"),   # выписывает make_setup_disk.py
+        ("MINSTALL.PS1", PC_SETUP_SRC / "metrics_install.ps1"),
+        ("METRICS.PS1", PC_SETUP_SRC / "metrics_agent.ps1"),
         ("AGENT.PS1", PC_SETUP_SRC / "agent_install.ps1"),
         ("ICS.PS1", ROOT / "tools" / "ics_enable.ps1"),
         ("NETCHECK.PS1", ROOT / "tools" / "net_check2.ps1"),
+        ("FIXUSB.PS1", ROOT / "tools" / "fix_usb_net.ps1"),        # ремонт USB-сети: адрес без шлюза
         ("READRU.TXT", PC_SETUP_SRC / "README-RU.txt"),
         ("READMEEN.TXT", PC_SETUP_SRC / "README-EN.txt"),
         ("GUIDE-RU.txt", ROOT / "docs" / "pc-setup-bridge.md"),   # полная инструкция по сети на ПК
     ]:
+        if not src.exists():
+            print(f"нет файла для pc-setup: {src}")
+            return 1
         shutil.copy2(src, pc_dst / name)
-    # SETUP.CMD берём из образа диска, чтобы файлы не разъехались
-    disk = DISK_IMAGE.read_bytes()
-    setup_cmd = extract_from_image(disk, "SETUP.CMD")
-    if setup_cmd is None:
-        print("в образе диска нет SETUP.CMD — образ собран не тем инструментом?")
-        return 1
-    (pc_dst / "SETUP.CMD").write_bytes(setup_cmd)
     print(f"  pc-setup/              {len(list(pc_dst.iterdir()))} файлов")
 
-    (KIT / "flash.bat").write_bytes(FLASH_BAT.replace("\n", "\r\n").encode("ascii"))
+    (KIT / "flash.bat").write_bytes(
+        FLASH_BAT.replace("__MSC__", hex(MSC_OFFSET)).replace("__DISK__", DISK_NAME)
+        .replace("\n", "\r\n").encode("ascii"))
     (KIT / "START-HERE.txt").write_bytes("\ufeff".encode("utf-8") + WHAT_TO_DO.replace("\n", "\r\n").encode("utf-8"))
     old_what = KIT / "WHAT-TO-DO.txt"
     if old_what.exists():
@@ -258,30 +282,6 @@ def main() -> int:
 
     print(f"комплект готов: {KIT}")
     return 0
-
-
-def extract_from_image(img: bytes, name: str) -> bytes | None:
-    """Достать файл из образа FAT12 (та же логика, что в проверке make_setup_disk)."""
-    sys.path.insert(0, str(ROOT / "tools"))
-    import make_msc_image as msc  # noqa: E402
-
-    sector, data_start = 512, msc.DATA_START
-    root_start = (msc.RESERVED_SECTORS + msc.NUM_FATS * msc.FAT_SECTORS) * sector
-    short = name.upper().partition(".")
-    short = short[0].ljust(8) + short[2].ljust(3)
-    for e in range(msc.ROOT_ENTRIES):
-        off = root_start + e * 32
-        entry = img[off:off + 11].decode("ascii", "replace")
-        if entry == short:
-            first = int.from_bytes(img[off + 26:off + 28], "little")
-            size = int.from_bytes(img[off + 28:off + 32], "little")
-            data = bytearray()
-            cl = first
-            while 2 <= cl < 0xFF8:
-                data += img[(data_start + (cl - 2)) * sector:(data_start + (cl - 1)) * sector]
-                cl = msc._fat12_get(img, cl)
-            return bytes(data[:size])
-    return None
 
 
 if __name__ == "__main__":

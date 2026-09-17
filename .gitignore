@@ -21,6 +21,9 @@ tools/*.msi
 # дампы прошивок (8 МБ каждый)
 firmware/backup/
 
+# бэкапы раздела msc, которые снимает tools/flash_msc_image.py перед записью (1,5–3,8 МБ)
+firmware/media/msc-backup-*.bin
+
 # локальные дампы «чёрного ящика» и синтетические проверки
 tools/diag-raw.bin
 tools/diag-test.bin

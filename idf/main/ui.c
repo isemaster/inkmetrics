@@ -21,6 +21,7 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "ingest.h"
 #include "netinfo.h"
 #include "ping_inet.h"
 #include "probe.h"
@@ -197,6 +198,30 @@ static void ui_task(void *arg)
         st.fw = fw_version_str();
         st.rotation = cfg->rotation;
         st.disk_write_lock = cfg->disk_write_lock;
+
+        /* метрики хоста от агента (POST /ingest): экран показывает ровно то, что
+           прислал хост, и возраст данных. Строки живут в im до конца итерации —
+           на них можно ссылаться в screen_state_t (кадр рисуется тут же). */
+        ingest_state_t im;
+        ingest_get(&im);
+        st.metrics_have = im.have;
+        st.metrics_fresh = im.fresh;
+        st.metrics_age_s = im.age_s;
+        st.metrics_host = im.host;
+        st.cpu_pct = im.cpu_pct;
+        st.mem_pct = im.mem_pct;
+        st.disk_pct = im.disk_pct;
+        st.gpu_pct = im.gpu_pct;
+        st.gpu_mem_pct = im.gpu_mem_pct;
+        st.gpu_temp_c = im.gpu_temp_c;
+        st.cpu_temp_c = im.cpu_temp_c;
+        st.hping_ok = im.ping_ok != 0;
+        st.hping_ms = im.ping_ms;
+        st.hup_ok = im.up_h >= 0;
+        st.hup_h = im.up_h;
+        st.tcp_ok = im.tcp_est >= 0;
+        st.tcp_est = im.tcp_est >= 0 ? (uint32_t)im.tcp_est : 0;
+        st.smart = im.smart;
 
         st.emergency = !online;            /* авария: инверсия + полное обновление */
 

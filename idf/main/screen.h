@@ -8,9 +8,12 @@
  * Строчных букв в крупном шрифте нет, поэтому весь текст перед выводом
  * приводится к верхнему регистру (см. upper_utf8() в screen.c).
  *
- *   0 DEVICE — состояние прибора: статус, время, датчик, пинг в интернет, адрес
- *   1 PING   — пинг во внешнюю сеть: последние ответы столбиком, потери, min/max
- *   2 HOST   — что видно о хосте: имя, адрес, ОТКРЫТЫЕ порты одной строкой, веб-ответ
+ *   0 DEVICE   — состояние прибора: статус, время, датчик, пинг в интернет, адрес
+ *   1 PING     — пинг во внешнюю сеть: последние ответы столбиком, потери, min/max
+ *   2 HOST     — что видно о хосте: имя, адрес, ОТКРЫТЫЕ порты одной строкой, веб-ответ
+ *   3 SETTINGS — настройки прибора
+ *   4 HOST SYS — метрики, присланные агентом хоста (POST /ingest): CPU, RAM, диск,
+ *                GPU, температуры, пинг, TCP, аптайм и возраст данных
  */
 #ifndef SCREEN_H
 #define SCREEN_H
@@ -18,7 +21,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define SCREEN_PAGES      4
+#define SCREEN_PAGES      5
 #define SCREEN_NEVER      0xFFFFFFFFu
 #define SCREEN_PING_LINES 6      /* сколько последних ответов показываем столбиком */
 #define SCREEN_PORTS_LEN  48     /* буфер строки с открытыми портами */
@@ -57,6 +60,22 @@ typedef struct {
     bool        web_ok;
     int         web_code;
     uint32_t    web_ms;
+
+    /* метрики хоста от агента (POST /ingest, модуль ingest.c) — страница HOST SYS */
+    bool        metrics_have;         /* хоть раз получали данные */
+    bool        metrics_fresh;        /* возраст не больше INGEST_STALE_S */
+    uint32_t    metrics_age_s;        /* сколько секунд с последнего приёма */
+    const char *metrics_host;         /* имя хоста из данных агента ("" — не назвался) */
+    float       cpu_pct, mem_pct, disk_pct;   /* загрузка CPU/RAM/диска, % (-1 — н/д) */
+    float       gpu_pct, gpu_mem_pct;         /* загрузка GPU и его памяти, % (-1 — н/д) */
+    int         gpu_temp_c, cpu_temp_c;       /* температуры, °C (-1 — н/д) */
+    bool        hping_ok;             /* хост пингует свою цель */
+    uint32_t    hping_ms;
+    bool        hup_ok;               /* аптайм хоста известен */
+    float       hup_h;                /* аптайм хоста, часы */
+    bool        tcp_ok;
+    uint32_t    tcp_est;              /* установленных TCP-соединений на хосте */
+    const char *smart;                /* SMART: OK / WARNING / UNHEALTHY ("" — н/д) */
 
     /* аварийное состояние: инверсный вид + полное обновление */
     bool        emergency;

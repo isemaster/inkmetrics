@@ -44,6 +44,7 @@
 #include "ui.h"                     /* экран прибора: панель, кнопки, SHTC3 (см. ui.c) */
 #include "timesync.h"               /* время с хоста: SNTP + подсказка от браузера */
 #include "probe.h"                  /* проверка сервисов хоста по сети */
+#include "ingest.h"                 /* метрики хоста от агента (POST /ingest) */
 #include "msc.h"                    /* диск хоста: прибор выглядит ещё и флешкой */
 #include "ping_inet.h"              /* пинг во внешнюю сеть — то, что на экране */
 #include "netinfo.h"                /* режим адресации: от роутера или аварийный */
@@ -65,7 +66,7 @@
 #define PING_TARGET_NAME "ya.ru"     /* цель пинга по умолчанию (значение хранится в настройках) */
 #define PING_TARGET_IP   "77.88.55.242"   /* запасной адрес, если DNS не отвечает */
 #define BOOT_GPIO     0
-#define FW_VERSION    "0.3.2-idf"
+#define FW_VERSION    "0.4.2-idf"
 
 static const char *TAG = "eink";
 static esp_netif_t *s_netif = NULL;
@@ -335,6 +336,15 @@ static const char INDEX_HTML[] =
     "const ping=s.p_target?'пинг '+s.p_target+': '+(s.p_ok?(s.p_avg+' мс, потери '+s.p_loss+'%'):'нет ответа'):'-';"
     "const hist=s.p_hist?s.p_hist:'-';"
     "const ports=s.ports_checked?(s.ports?s.ports:'нет открытых портов'):'проверяю';"
+    "const fmt=(v,u)=>v>=0?(v+u):'-';"
+    "const im=s.ingest||{have:0};"
+    "const met=im.have?(('CPU '+fmt(im.cpu,'%')+' RAM '+fmt(im.mem,'%')+' диск '+fmt(im.disk,'%'))"
+    "+(im.gpu>=0?(' GPU '+im.gpu+'%'+(im.gpu_temp>=0?(' '+im.gpu_temp+'C'):'')):'')"
+    "+(im.cpu_temp>=0?(' TMP '+im.cpu_temp+'C'):'')"
+    "+', '+im.age+' с назад'+(im.fresh?'':' (УСТАРЕЛО)')):'нет данных от агента';"
+    "const met2=im.have?((im.ping_ok?('пинг '+im.ping_ms+' мс'):'пинг: нет ответа')"
+    "+' · TCP '+im.tcp+(im.up_h>=0?(' · аптайм '+im.up_h.toFixed(1)+' ч'):'')"
+    "+' · SMART '+(im.smart?im.smart:'-')+(im.count?(' · приёмов '+im.count):'')):'-';"
     "document.getElementById('t').innerHTML="
     "`<tr><td>Режим сети</td><td>${s.mode_ru}</td></tr>`+"
     "`<tr><td>Адрес прибора</td><td>${s.ip}</td></tr>`+"
@@ -345,6 +355,8 @@ static const char INDEX_HTML[] =
     "`<tr><td>Время</td><td>${tm}</td></tr>`+"
     "`<tr><td>Хост (кто открыл страницу)</td><td>${host}</td></tr>`+"
     "`<tr><td>Открытые порты хоста</td><td>${ports}</td></tr>`+"
+    "`<tr><td>Метрики хоста (агент)</td><td>${met}</td></tr>`+"
+    "`<tr><td>Хост: пинг, TCP, SMART</td><td>${met2}</td></tr>`+"
     "`<tr><td>Веб-сервер хоста</td><td>${s.http_ok?(s.http_code+' за '+s.http_ms+' мс'):'нет ответа'}</td></tr>`+"
     "`<tr><td>Диск прибора</td><td>${Math.round(s.disk_kb)} КБ, ${s.wlock?'только чтение':'чтение и запись'}</td></tr>`+"
     "`<tr><td>Поворот экрана</td><td>${s.rotation}°</td></tr>`+"
@@ -538,6 +550,10 @@ static esp_err_t state_get(httpd_req_t *req)
     float t = 0, rh = 0;
     ui_get_sensor(&sensor_ok, &t, &rh);
 
+    /* метрики, присланные агентом хоста (POST /ingest, модуль ingest.c) */
+    ingest_state_t im;
+    ingest_get(&im);
+
     char tstr[16], dstr[16];
     timesync_time_str(tstr, sizeof(tstr));
     timesync_date_str(dstr, sizeof(dstr));
@@ -562,7 +578,7 @@ static esp_err_t state_get(httpd_req_t *req)
         mode_ru = "аварийный (192.168.7.1, адрес выдаёт прибор)";
     }
 
-    static char json[1200];
+    static char json[1900];
     int n = snprintf(json, sizeof(json),
         "{\"fw\":\"%s\",\"up\":%lld,\"heap\":%u,\"link\":%u,\"reconnects\":%u,"
         "\"mode\":\"%s\",\"mode_ru\":\"%s\",\"ip\":\"%s\",\"gw\":\"%s\","
@@ -573,7 +589,10 @@ static esp_err_t state_get(httpd_req_t *req)
         "\"host\":\"%s\",\"host_name\":\"%s\",\"host_known\":%u,"
         "\"ports\":\"%s\",\"ports_checked\":%u,\"http_ok\":%u,\"http_code\":%d,\"http_ms\":%u,"
         "\"disk_kb\":%u,\"wlock\":%u,\"rotation\":%u,"
-        "\"silence_s\":%u,\"fallback_left_s\":%u,\"http\":%u}",
+        "\"silence_s\":%u,\"fallback_left_s\":%u,\"http\":%u,"
+        "\"ingest\":{\"have\":%u,\"fresh\":%u,\"age\":%u,\"count\":%u,\"host\":\"%s\","
+        "\"cpu\":%.0f,\"mem\":%.0f,\"disk\":%.0f,\"gpu\":%.0f,\"gpu_temp\":%d,\"gpu_mem\":%.0f,"
+        "\"cpu_temp\":%d,\"ping_ok\":%u,\"ping_ms\":%u,\"up_h\":%.1f,\"tcp\":%d,\"smart\":\"%s\"}}",
         fw_version_str(), esp_timer_get_time() / 1000000,
         (unsigned)esp_get_free_heap_size(), s_link_up ? 1u : 0u, (unsigned)s_reconnects,
         net_mode_text(), mode_ru, net_ip_str(), net_gw_str(),
@@ -585,7 +604,13 @@ static esp_err_t state_get(httpd_req_t *req)
         pr.ports, (unsigned)(pr.checked ? 1 : 0), pr.http_ok ? 1u : 0u, pr.http_code,
         (unsigned)pr.http_ms,
         (unsigned)(disk_sectors * 512u / 1024u), wlock ? 1u : 0u, (unsigned)cfg->rotation,
-        (unsigned)sc.silence_s, (unsigned)sc.fallback_left_s, (unsigned)sc.http_hits);
+        (unsigned)sc.silence_s, (unsigned)sc.fallback_left_s, (unsigned)sc.http_hits,
+        (unsigned)(im.have ? 1 : 0), (unsigned)(im.fresh ? 1 : 0), (unsigned)im.age_s,
+        (unsigned)im.count, im.host,
+        (double)im.cpu_pct, (double)im.mem_pct, (double)im.disk_pct,
+        (double)im.gpu_pct, im.gpu_temp_c, (double)im.gpu_mem_pct,
+        im.cpu_temp_c, (unsigned)im.ping_ok, (unsigned)im.ping_ms, (double)im.up_h,
+        (int)im.tcp_est, im.smart);
     httpd_resp_set_type(req, "application/json");
     return httpd_resp_send(req, json, n);
 }
@@ -621,6 +646,41 @@ static esp_err_t hosttime_get(httpd_req_t *req)
     return httpd_resp_send(req, "ok\n", HTTPD_RESP_USE_STRLEN);
 }
 
+/* ------------------------------------------------------- метрики хоста (агент) */
+/* POST /ingest — сюда агент на хосте (host_metrics.ps1) раз в минуту шлёт плоский
+   JSON с тем, что по сети не узнать: загрузка CPU, память, диск, GPU, температуры.
+   Разбор — в ingest.c; показ — страница HOST SYS на экране и страница прибора. */
+static char s_ingest_body[INGEST_BODY_LEN];
+
+static esp_err_t ingest_post(httpd_req_t *req)
+{
+    selfcheck_http_hit();          /* агент постучался — это признак жизни хоста */
+    note_host_from_request(req);
+
+    int total = req->content_len;
+    if (total <= 0 || total >= (int)sizeof(s_ingest_body)) {
+        ESP_LOGW(TAG, "POST /ingest: негодная длина тела (%d)", total);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad body");
+        return ESP_FAIL;
+    }
+    int got = 0;
+    while (got < total) {
+        int r = httpd_req_recv(req, s_ingest_body + got, total - got);
+        if (r <= 0) {
+            if (r == HTTPD_SOCK_ERR_TIMEOUT) {
+                continue;              /* хост медлит — ждём остаток тела */
+            }
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "recv failed");
+            return ESP_FAIL;
+        }
+        got += r;
+    }
+    s_ingest_body[got] = 0;
+    ingest_apply(s_ingest_body);
+    httpd_resp_set_type(req, "text/plain; charset=utf-8");
+    return httpd_resp_send(req, "ok\n", HTTPD_RESP_USE_STRLEN);
+}
+
 static void start_http(void)
 {
     httpd_handle_t server = NULL;
@@ -635,6 +695,7 @@ static void start_http(void)
     httpd_uri_t uri_boot  = { .uri = "/api/boot", .method = HTTP_GET, .handler = boot_get };
     httpd_uri_t uri_time  = { .uri = "/api/host-time", .method = HTTP_GET, .handler = hosttime_get };
     httpd_uri_t uri_renew = { .uri = "/api/renew", .method = HTTP_GET, .handler = renew_get };
+    httpd_uri_t uri_ing   = { .uri = "/ingest", .method = HTTP_POST, .handler = ingest_post };
     ESP_ERROR_CHECK(httpd_register_uri_handler(server, &uri_index));
     ESP_ERROR_CHECK(httpd_register_uri_handler(server, &uri_setup));
     ESP_ERROR_CHECK(httpd_register_uri_handler(server, &uri_sset));
@@ -642,6 +703,7 @@ static void start_http(void)
     ESP_ERROR_CHECK(httpd_register_uri_handler(server, &uri_boot));
     ESP_ERROR_CHECK(httpd_register_uri_handler(server, &uri_time));
     ESP_ERROR_CHECK(httpd_register_uri_handler(server, &uri_renew));
+    ESP_ERROR_CHECK(httpd_register_uri_handler(server, &uri_ing));
     selfcheck_http_up(true);
     ESP_LOGI(TAG, "HTTP-сервер поднят: http://" USB_NET_IP "/");
 }

@@ -2,7 +2,7 @@
 rem inkmetrics (ESP-IDF build): firmware + host disk image.
 rem Usage: flash.bat COM5
 rem Put the board into bootloader first: hold BOOT, plug USB, keep 2 s, release.
-rem The disk image (setup-disk.img) contains SETUP.CMD - the device brings the PC
+rem The disk image contains SETUP.CMD - the device brings the PC
 rem setup scripts with it (see pc-setup folder for copies).
 rem ASCII only on purpose: cmd.exe renders Russian text from a UTF-8 .bat as garbage.
 setlocal
@@ -32,7 +32,7 @@ echo Flashing inkmetrics to %~1 ...
   0x8000   "%~dp0partition-table.bin" ^
   0xe000   "%~dp0ota_data_initial.bin" ^
   0x20000  "%~dp0inkmetrics_idf.bin" ^
-  0x670000 "%~dp0setup-disk.img"
+  0x430000 "%~dp0setup-disk-big.img"
 if errorlevel 1 (
   echo.
   echo FAILED. Check the port and that the board is in bootloader mode ^(hold BOOT, plug USB^).

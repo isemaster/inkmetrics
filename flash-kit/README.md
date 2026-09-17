@@ -6,7 +6,7 @@
 | Папка | Что внутри | Когда заливать |
 |---|---|---|
 | `arduino/` | рабочая прошивка прибора (Arduino-версия): отдаёт диск `E:` со страницей `INKMETRICS.HTM` + COM-порт приложения | **чтобы вернуть прибор в работу** |
-| `idf/` | экспериментальная прошивка на ESP-IDF (USB-сеть, прибор как сетевая карта) | только для отладки USB-сети. **Кнопку BOOT для перепрошивки держать не нужно:** если за 5 минут хост ни разу не отозвался (нет ping, кадров в сети, HTTP-запросов), прибор сам уходит в режим загрузчика — просто подключаешь USB и шьёшь. В рабочем варианте эта самопроверка будет отключена (`SELFCHECK_ENABLED 0` в `idf/main/selfcheck.h`) |
+| `idf/` | прошивка на ESP-IDF: USB-сеть (прибор как сетевая карта), диск хоста 3,69 МБ, метрики ПК на экране (`POST /ingest`, страница `HOST SYS`). Рядом лежит образ диска `setup-disk-big.img` — он пишется в раздел `msc` по адресу `0x430000` (в `flash.bat` уже прописан). Прошивка идёт как раньше: кнопка `BOOT` при подключении USB. Самопроверка (уход в загрузчик после 5 минут молчания хоста) в рабочем варианте выключается: `SELFCHECK_ENABLED 0` в `idf/main/selfcheck.h` | основная сборка прибора |
 
 ## Почему прибор «то определяется, то отсоединяется» раз в секунду
 
@@ -127,14 +127,19 @@ esptool сам сбросит чип после записи.
 Образы (`*.bin`) в git не хранятся — их кладут заново из сборок проекта:
 
 ```bash
-cd /d/inkmetrics
+cd /d/inkmetrics            # рабочая копия проекта (исходный — D:\inkmetrics)
 # Arduino-версия: bash tools/build.sh   (собирает firmware/build/*.bin)
 cp firmware/build/inkmetrics.ino.bootloader.bin firmware/build/inkmetrics.ino.partitions.bin \
    firmware/build/inkmetrics.ino.bin flash-kit/arduino/
 cp "$LOCALAPPDATA/Arduino15/packages/esp32/hardware/esp32/2.0.9/tools/partitions/boot_app0.bin" flash-kit/arduino/
-# IDF-версия: python C:/esp/idf_build.py -C D:/inkmetrics/idf -B D:/inkmetrics/idf/build build
+# IDF-версия: python C:/esp/idf_build.py -C D:/inkmetrics/idf build
 cp idf/build/bootloader/bootloader.bin idf/build/partition_table/partition-table.bin \
    idf/build/ota_data_initial.bin idf/build/inkmetrics_idf.bin flash-kit/idf/
+# диск хоста: образ 3,69 МБ (MBR + FAT16) собирается из tools/pc_setup и заливается в раздел msc
+python tools/make_setup_disk.py                 # -> firmware/media/setup-disk-big.img
+cp firmware/media/setup-disk-big.img flash-kit/idf/
+cp tools/pc_setup/metrics_agent.ps1  flash-kit/idf/pc-setup/METRICS.PS1
+cp tools/pc_setup/metrics_install.ps1 flash-kit/idf/pc-setup/MINSTALL.PS1
 # объединённые образы (пишутся с 0x0)
 cd flash-kit/arduino && /c/Python314/python.exe -m esptool --chip esp32s3 merge-bin \
    -o inkmetrics-arduino-0x0.bin 0x0 inkmetrics.ino.bootloader.bin 0x8000 inkmetrics.ino.partitions.bin \
@@ -142,4 +147,7 @@ cd flash-kit/arduino && /c/Python314/python.exe -m esptool --chip esp32s3 merge-
 cd ../idf && /c/Python314/python.exe -m esptool --chip esp32s3 merge-bin \
    -o inkmetrics-idf-0x0.bin 0x0 bootloader.bin 0x8000 partition-table.bin \
    0xe000 ota_data_initial.bin 0x20000 inkmetrics_idf.bin
+# контрольные суммы комплекта
+cd /d/inkmetrics/flash-kit/idf && sha256sum bootloader.bin partition-table.bin ota_data_initial.bin \
+   inkmetrics_idf.bin setup-disk-big.img setup-disk.img > SHA256SUMS.txt
 ```
