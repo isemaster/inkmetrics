@@ -351,7 +351,7 @@ if ($found) {
             }
         } else {
             Result 'device receives metrics' 'FAIL' '/api/state has no ingest block: the firmware is older than 0.4.0'
-            Hint 'Flash the current build: only firmware 0.4.0+ has POST /ingest and the HOST SYS page.'
+            Hint 'Flash the current build: only firmware 0.5.0+ has POST /ingest and the summary screen.'
         }
 
         # The probe is opt-in on purpose: it writes to the device, and its numbers (CPU/RAM 0)
@@ -404,7 +404,7 @@ if ($script:Hints.Count -gt 0) {
     Out-Line 'next steps: nothing to fix - device, agent, tasks and metrics path all look good.'
 }
 Out-Line ''
-Out-Line 'The last proof is the device itself: press PWR until page 5/5 HOST SYS.'
+Out-Line 'The last proof is the device itself: the frame must read ONLINE and the numbers must match this PC.'
 Out-Line 'The CPU and memory numbers there must match this PC - those numbers come from'
 Out-Line 'the agent on this machine, so a match means the whole chain works.'
 

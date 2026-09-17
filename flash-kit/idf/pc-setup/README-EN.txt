@@ -47,9 +47,10 @@ Installation (5 steps)
    ("Yes"). The rights are needed once: for the adapter address and the task.
 3. Wait for "set : 192.168.7.2/24, no gateway", "task inkmetrics agent : registered"
    and "Agent installed". The window stays open.
-4. Check the device: press PWR until page HOST SYS (5/5). It shows CPU, memory, disk
-   and the age of the data - the numbers must match this PC and the age must be tens
-   of seconds.
+4. Check the device: the frame must read ONLINE (this PC has internet), below it the GPU
+   temperature in large digits, then CPU / RAM / DISK percentages and uptime. A short PWR
+   press switches to the SETUP screen and back. The numbers must match this PC; NO DATA in
+   the frame means the agent is not sending (see step 5).
 5. Check on the PC (either):
 
        schtasks /query /tn "inkmetrics agent" /v /fo LIST
@@ -60,8 +61,13 @@ Installation (5 steps)
 What the agent does
 -------------------
 Every 60 seconds the agent collects this PC's metrics and sends them to the device with
-POST http://192.168.7.1/ingest. The device shows them on the HOST SYS page and tracks
-their age: data older than 3 minutes is marked STALE.
+POST http://192.168.7.1/ingest: CPU load, memory, disk, temperature and load of every
+NVIDIA card, uptime. Separately the agent checks this PC's internet access (ping to the
+target, 8.8.8.8 by default, with a TCP 443 fallback when ICMP stays silent) - that answer
+is what the device prints as ONLINE or OFFLINE in the frame.
+
+When no metrics arrive for 90 seconds the device shows NO DATA and replaces the numbers
+with dashes: it will not pass old readings off as current ones.
 
 Manual channel test (from a PowerShell window):
 
@@ -111,8 +117,8 @@ No metrics - what to check, in order
    the host internet goes into the device: remove the gateway, keep only the address.
 5. Device: http://192.168.7.1/api/state, the ingest block (count and age). count must
    grow every minute, age must be seconds.
-6. Device firmware: only 0.4.0 and newer accepts metrics (the HOST SYS page and the
-   /ingest request). The version is shown on the device page and screen.
+6. Device firmware: only 0.5.0 and newer accepts metrics (the summary screen and the
+   /ingest request). The version is shown on the device page and on its SETUP screen.
 
 Requirements and limitations
 ----------------------------

@@ -106,8 +106,8 @@ if errorlevel 1 (
 echo.
 echo   Agent installed. The device is used as a monitor: this PC is 192.168.7.2 on the
 echo   device link, the device is always 192.168.7.1.
-echo   On the device press PWR until page 5/5 HOST SYS: the CPU and memory numbers
-echo   there must match this PC.
+echo   On the device the frame must read ONLINE and the numbers (GPU temperature, CPU / RAM
+echo   / DISK) must match this PC.
 echo   Check this PC:   schtasks /query /tn "inkmetrics agent" /v /fo LIST
 echo                    type "%DIR%\agent.log"
 echo   Remove it again: deinstall.cmd
@@ -637,5 +637,5 @@ if (Test-Path $log) {
 } else {
     Say 'agent.log is not there yet - the first send can take up to a minute'
 }
-Say 'done. On the device press PWR until page 5/5 HOST SYS - the numbers must match this PC.'
+Say 'done. The device frame must read ONLINE and the numbers must match this PC.'
 exit 0

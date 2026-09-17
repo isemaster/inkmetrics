@@ -100,9 +100,11 @@ ESP-IDF, ни драйверов. Запускать можно из любой 
    согласиться ("Да"). Права нужны один раз: для адреса адаптера и задачи.
 3. Дождаться строк "set : 192.168.7.2/24, no gateway", "task inkmetrics agent :
    registered" и "Agent installed". Окно само держится открытым.
-4. Проверить на приборе: нажимать кнопку PWR, пока не появится страница HOST SYS
-   (5/5). Там CPU, память, диск и возраст данных - числа должны совпадать с этим
-   компьютером, возраст - десятки секунд.
+4. Проверить на приборе: на экране должна быть рамка ONLINE (значит, у этого компьютера
+   есть интернет), под ней - температура видеокарты крупными цифрами, а ниже - проценты
+   CPU / RAM / DISK и аптайм. Короткое нажатие PWR переключает на экран SETUP и обратно.
+   Числа должны совпадать с этим компьютером. Если в рамке NO DATA - агент не шлёт
+   метрики, смотрите пункт 5.
 5. Проверить на компьютере (любая из проверок):
 
        schtasks /query /tn "inkmetrics agent" /v /fo LIST
@@ -113,8 +115,13 @@ ESP-IDF, ни драйверов. Запускать можно из любой 
 Что агент делает
 ----------------
 Раз в 60 секунд агент собирает метрики этого компьютера и отправляет их прибору
-запросом POST на http://192.168.7.1/ingest. Прибор показывает их на странице
-HOST SYS и считает возраст: данные старше 3 минут помечаются как STALE (устарело).
+запросом POST на http://192.168.7.1/ingest: загрузку CPU, память, диск, температуры и
+загрузку видеокарт (по всем картам), аптайм. Отдельно агент проверяет интернет этого
+компьютера (пинг цели, по умолчанию 8.8.8.8, при молчании ICMP - проверка TCP 443):
+именно по этому ответу прибор пишет в рамке ONLINE или OFFLINE.
+
+Если метрики не приходят дольше 90 секунд, прибор пишет NO DATA и показывает прочерки
+вместо чисел - старые данные за текущие он не выдаёт.
 
 Проверить канал руками (в окне PowerShell):
 
@@ -163,8 +170,8 @@ HOST SYS и считает возраст: данные старше 3 мину�
    есть - интернет компьютера уходит в прибор: уберите шлюз, оставьте только адрес.
 5. Прибор: страница http://192.168.7.1/api/state, поле ingest (count и age).
    count растёт каждую минуту, age - секунды.
-6. Прошивка прибора: метрики принимает только 0.4.0 и новее (страница HOST SYS и
-   запрос /ingest). Версия показана на странице прибора и на его экране.
+6. Прошивка прибора: метрики принимает только 0.5.0 и новее (сводный экран и запрос
+   /ingest). Версия показана на странице прибора и на экране SETUP прибора.
 
 Требования и ограничения
 ------------------------
@@ -243,9 +250,10 @@ Installation (5 steps)
    ("Yes"). The rights are needed once: for the adapter address and the task.
 3. Wait for "set : 192.168.7.2/24, no gateway", "task inkmetrics agent : registered"
    and "Agent installed". The window stays open.
-4. Check the device: press PWR until page HOST SYS (5/5). It shows CPU, memory, disk
-   and the age of the data - the numbers must match this PC and the age must be tens
-   of seconds.
+4. Check the device: the frame must read ONLINE (this PC has internet), below it the GPU
+   temperature in large digits, then CPU / RAM / DISK percentages and uptime. A short PWR
+   press switches to the SETUP screen and back. The numbers must match this PC; NO DATA in
+   the frame means the agent is not sending (see step 5).
 5. Check on the PC (either):
 
        schtasks /query /tn "inkmetrics agent" /v /fo LIST
@@ -256,8 +264,13 @@ Installation (5 steps)
 What the agent does
 -------------------
 Every 60 seconds the agent collects this PC's metrics and sends them to the device with
-POST http://192.168.7.1/ingest. The device shows them on the HOST SYS page and tracks
-their age: data older than 3 minutes is marked STALE.
+POST http://192.168.7.1/ingest: CPU load, memory, disk, temperature and load of every
+NVIDIA card, uptime. Separately the agent checks this PC's internet access (ping to the
+target, 8.8.8.8 by default, with a TCP 443 fallback when ICMP stays silent) - that answer
+is what the device prints as ONLINE or OFFLINE in the frame.
+
+When no metrics arrive for 90 seconds the device shows NO DATA and replaces the numbers
+with dashes: it will not pass old readings off as current ones.
 
 Manual channel test (from a PowerShell window):
 
@@ -307,8 +320,8 @@ No metrics - what to check, in order
    the host internet goes into the device: remove the gateway, keep only the address.
 5. Device: http://192.168.7.1/api/state, the ingest block (count and age). count must
    grow every minute, age must be seconds.
-6. Device firmware: only 0.4.0 and newer accepts metrics (the HOST SYS page and the
-   /ingest request). The version is shown on the device page and screen.
+6. Device firmware: only 0.5.0 and newer accepts metrics (the summary screen and the
+   /ingest request). The version is shown on the device page and on its SETUP screen.
 
 Requirements and limitations
 ----------------------------
@@ -459,8 +472,8 @@ if errorlevel 1 (
 echo.
 echo   Agent installed. The device is used as a monitor: this PC is 192.168.7.2 on the
 echo   device link, the device is always 192.168.7.1.
-echo   On the device press PWR until page 5/5 HOST SYS: the CPU and memory numbers
-echo   there must match this PC.
+echo   On the device the frame must read ONLINE and the numbers (GPU temperature, CPU / RAM
+echo   / DISK) must match this PC.
 echo   Check this PC:   schtasks /query /tn "inkmetrics agent" /v /fo LIST
 echo                    type "%DIR%\agent.log"
 echo   Remove it again: deinstall.cmd

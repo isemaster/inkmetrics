@@ -112,5 +112,5 @@ if (Test-Path $log) {
 } else {
     Say 'agent.log is not there yet - the first send can take up to a minute'
 }
-Say 'done. On the device press PWR until page 5/5 HOST SYS - the numbers must match this PC.'
+Say 'done. The device frame must read ONLINE and the numbers must match this PC.'
 exit 0
