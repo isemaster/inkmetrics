@@ -37,6 +37,23 @@ if (-not $elevated) {
     exit 1
 }
 
+# The kit must NOT sit inside its own install folder: the metrics agent is installed here as
+# agent.ps1, while the sharing setup is a kit file named AGENT.PS1 - and on Windows those two
+# names are the same file, so one silently overwrites the other (seen on a real PC 17.09).
+$hereFull = ''
+$dirFull  = ''
+try { $hereFull = (Resolve-Path $here).Path.TrimEnd('\') } catch { $hereFull = $here.TrimEnd('\') }
+try { $dirFull  = (Resolve-Path $InstallDir).Path.TrimEnd('\') } catch { $dirFull = $InstallDir.TrimEnd('\') }
+if ($hereFull -ieq $dirFull) {
+    Say 'ERROR: this kit lies inside its own install folder - refusing to install.'
+    Say ('  folder: ' + $hereFull)
+    Say '  agent.ps1 (the metrics agent) and AGENT.PS1 (internet sharing) are the same file name on'
+    Say '  Windows, so installing here would overwrite the sharing setup with the agent or the other'
+    Say '  way round. Copy the kit to a folder of its own (or run SETUP.CMD from the device disk)'
+    Say '  and start SETUP.CMD there.'
+    exit 1
+}
+
 if ($Remove) {
     Say 'inkmetrics: removing the metrics agent'
     & schtasks.exe /delete /tn $TaskName /f 2>&1 | ForEach-Object { Say ('  schtasks: ' + $_) }

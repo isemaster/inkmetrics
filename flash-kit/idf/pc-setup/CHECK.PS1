@@ -68,16 +68,32 @@ if ($pnp.Count -gt 0) {
 }
 
 # ---------------------------------------------------------------- 2. the device disk
+# The label alone is not enough: Windows can bind a stale "floppy" node and show no volume,
+# or mount the volume without a label. So we look for a drive that really carries the kit.
 $disk = ''
-$vol = @(Get-Volume -ErrorAction SilentlyContinue | Where-Object { $_.FileSystemLabel -eq 'INKMETRICS' })
-if ($vol.Count -gt 0) {
-    $disk = [string]$vol[0].DriveLetter
-    if ($disk) { $disk = $disk + ':' }
-}
 $required = @('SETUP.CMD', 'MINSTALL.PS1', 'METRICS.PS1', 'AGENT.PS1', 'ICS.PS1')
+$vols = @()
+try { $vols = @(Get-Volume -ErrorAction SilentlyContinue | Where-Object { $_.DriveLetter }) } catch { }
+foreach ($v in $vols) {
+    $letter = [string]$v.DriveLetter + ':'
+    $names = @()
+    try {
+        $names = @(Get-ChildItem ($letter + '\') -File -ErrorAction SilentlyContinue |
+                   ForEach-Object { $_.Name })
+    } catch { }
+    if (($names -contains 'SETUP.CMD') -and ($names -contains 'METRICS.PS1')) { $disk = $letter; break }
+}
+if (-not $disk) {
+    $labelled = @($vols | Where-Object { $_.FileSystemLabel -eq 'INKMETRICS' })
+    if ($labelled.Count -gt 0) { $disk = [string]$labelled[0].DriveLetter + ':' }
+}
+
 if ($disk) {
     $files = @(Get-ChildItem ($disk + '\') -File -ErrorAction SilentlyContinue)
-    Result ('device disk ' + $disk) 'OK' ('volume INKMETRICS, ' + $files.Count + ' files')
+    $volinfo = @($vols | Where-Object { ([string]$_.DriveLetter + ':') -eq $disk })
+    $label = ''
+    if ($volinfo.Count -gt 0) { $label = 'volume ' + $volinfo[0].FileSystemLabel + ', ' }
+    Result ('device disk ' + $disk) 'OK' ($label + $files.Count + ' files')
     Out-Line ('       files: ' + (($files | ForEach-Object { $_.Name + ' (' + $_.Length + ')' }) -join ', '))
     $names = @($files | ForEach-Object { $_.Name })
     $missing = @($required | Where-Object { $names -notcontains $_ })
@@ -87,16 +103,28 @@ if ($disk) {
         Result 'disk carries the required files' 'FAIL' ('missing: ' + ($missing -join ', '))
         Hint 'The disk holds an OLD image: flash the device with the current build (flash-kit\idf\flash.bat COMx).'
     }
-    foreach ($extra in @('CHECK.PS1', 'CHECK.CMD')) {
-        if ($names -notcontains $extra) {
-            Result ('disk has ' + $extra) 'WARN' 'this disk was made before CHECK.PS1/CHECK.CMD - copy them from the project folder pc-setup'
-        }
-    }
 } else {
-    if ($pnp.Count -gt 0) {
-        Result 'device disk (volume INKMETRICS)' 'FAIL' 'device is on USB but the disk is not mounted - if it is in BOOT mode, replug it without holding BOOT'
+    Out-Line '       volumes on this PC:'
+    foreach ($v in $vols) {
+        Out-Line ('       ' + $v.DriveLetter + ':  ' + $v.FileSystemLabel + '  ' + $v.FileSystem +
+                  '  ' + [int]($v.Size / 1MB) + ' MB  ' + $v.DriveType)
+    }
+    $stor = @()
+    try {
+        $stor = @(Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue |
+                  Where-Object { ($_.InstanceId -like '*INKMETRICS*') -or ($_.FriendlyName -like '*INKMETRICS*') })
+    } catch { }
+    if ($stor.Count -gt 0) {
+        Out-Line '       storage nodes with INKMETRICS in the name:'
+        foreach ($n in $stor) { Out-Line ('       ' + $n.Status + '  ' + $n.Class + '  ' + $n.FriendlyName) }
     } else {
-        Result 'device disk (volume INKMETRICS)' 'WARN' 'not found (the device is not on USB either)'
+        Out-Line '       no node with INKMETRICS in the name (Windows sees the USB device but no storage node)'
+    }
+    if ($pnp.Count -gt 0) {
+        Result 'device disk' 'FAIL' 'the device is on USB, but no drive with the kit files is mounted'
+        Hint 'Run FIXDISK.PS1 (in this folder, as administrator): it removes the stale storage node of the device and rescans the bus. Then replug the device. If the disk still does not appear, look in Disk Management for a disk without a letter.'
+    } else {
+        Result 'device disk' 'WARN' 'not found (the device is not on USB either)'
     }
 }
 
@@ -106,6 +134,36 @@ $log = Join-Path $Dir 'agent.log'
 if (Test-Path $Dir) {
     $have = @(Get-ChildItem $Dir -File -ErrorAction SilentlyContinue | ForEach-Object { $_.Name })
     Result 'agent installed' 'OK' ('C:\ProgramData\inkmetrics: ' + ($have -join ', '))
+
+    # The kit must NOT live inside the install folder: the metrics agent is installed AS
+    # agent.ps1, and on Windows agent.ps1 and AGENT.PS1 (the sharing setup) are one and the
+    # same file - unpacking the kit there makes them overwrite each other.
+    $kitInside = (Test-Path (Join-Path $Dir 'MINSTALL.PS1')) -or (Test-Path (Join-Path $Dir 'SETUP.CMD'))
+    if ($kitInside) {
+        Result 'kit kept outside the install folder' 'FAIL' 'the kit itself lies in C:\ProgramData\inkmetrics'
+        Hint 'Move the kit out of C:\ProgramData\inkmetrics (a folder of its own, or the device disk). Inside it, agent.ps1 (metrics) and AGENT.PS1 (sharing) are the same file.'
+    }
+
+    $AgentFile = Join-Path $Dir 'agent.ps1'
+    if (Test-Path $AgentFile) {
+        $agentHead = ''
+        try { $agentHead = ((Get-Content $AgentFile -TotalCount 2 -Encoding UTF8) -join ' ') } catch { }
+        $sz = 0
+        try { $sz = (Get-Item $AgentFile).Length } catch { }
+        if ($agentHead -match 'host monitoring agent') {
+            Result 'metrics agent file (agent.ps1)' 'OK' ($sz.ToString() + ' bytes, the metrics agent')
+        } else {
+            Result 'metrics agent file (agent.ps1)' 'FAIL' ('holds another script (' + $sz + ' bytes) - the metrics agent was overwritten')
+            Hint 'On Windows agent.ps1 (the metrics agent, written by MINSTALL.PS1) and AGENT.PS1 (the sharing setup, a kit file) are the SAME name. An older kit overwrote one with the other: run SETUP.CMD from the device disk again with the current kit.'
+        }
+    } else {
+        Result 'metrics agent file (agent.ps1)' 'FAIL' 'missing: the task "inkmetrics agent" has nothing to start'
+        Hint 'agent.ps1 is written by MINSTALL.PS1 (copied from METRICS.PS1): run SETUP.CMD from the device disk again, as administrator.'
+    }
+    if (-not (Test-Path (Join-Path $Dir 'ICS.PS1'))) {
+        Result 'sharing script (ICS.PS1)' 'WARN' 'not in C:\ProgramData\inkmetrics: the task "inkmetrics ICS" has nothing to run'
+    }
+
     if (Test-Path $log) {
         $age = [int]((Get-Date) - (Get-Item $log).LastWriteTime).TotalSeconds
         if ($age -lt 180) {
@@ -185,8 +243,10 @@ if (Test-Path $pidFile) {
 if (-not $alive) {
     $proc = @()
     try {
+        # $PID is skipped on purpose: this very script lives in C:\ProgramData\inkmetrics\CHECK.PS1,
+        # so its own command line contains "inkmetrics" and used to look like a running agent.
         $proc = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction Stop |
-                  Where-Object { $_.CommandLine -like '*inkmetrics*' })
+                  Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -like '*inkmetrics\agent.ps1*' })
     } catch { }
     if ($proc.Count -gt 0) {
         $alive = $true

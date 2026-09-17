@@ -226,6 +226,7 @@ def main() -> int:
         ("NETCHECK.PS1", ROOT / "tools" / "net_check2.ps1"),
         ("CHECK.PS1", PC_SETUP_SRC / "check.ps1"),
         ("CHECK.CMD", PC_SETUP_SRC / "check.cmd"),
+        ("FIXDISK.PS1", ROOT / "tools" / "reset_disk_node.ps1"),    # диск прибора не появился
         ("FIXUSB.PS1", ROOT / "tools" / "fix_usb_net.ps1"),        # ремонт USB-сети: адрес без шлюза
         ("READRU.TXT", PC_SETUP_SRC / "README-RU.txt"),
         ("READMEEN.TXT", PC_SETUP_SRC / "README-EN.txt"),

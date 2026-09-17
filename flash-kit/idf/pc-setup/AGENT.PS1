@@ -54,7 +54,10 @@ if (-not $elevated -and -not $DryRun) {
 }
 
 # ---------------------------------------------------------------- 1. copy files
-$files = @("AGENT.PS1", "ICS.PS1", "NETCHECK.PS1")
+# NOTE: AGENT.PS1 (this file, the sharing setup) is NOT copied: on Windows its name equals
+# agent.ps1, which is where MINSTALL.PS1 puts the metrics agent - copying itself here would
+# silently overwrite the agent with the sharing setup and no metrics would ever arrive.
+$files = @("ICS.PS1", "NETCHECK.PS1")
 if ($DryRun) {
     Say "DRY RUN: would copy to $InstallDir :"
     foreach ($f in $files) { Say ("    " + (Join-Path $SourceDir $f) + " -> " + $f) }
