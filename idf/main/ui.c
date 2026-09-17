@@ -55,7 +55,7 @@ static void btn_cb(btn_id_t btn, btn_event_t ev)
             ESP_LOGW(TAG, "настройки: диск %s", settings_get()->disk_write_lock ?
                      "только чтение" : "чтение и запись");
         } else if (ev == BTN_EV_SHORT) {
-            uint8_t deg = settings_rotation_next();
+            uint16_t deg = settings_rotation_next();
             ESP_LOGI(TAG, "настройки: поворот экрана %u", (unsigned)deg);
         }
         s_redraw = true;

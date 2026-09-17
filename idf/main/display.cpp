@@ -48,7 +48,7 @@ static void fb_px(int x, int y, bool black)
 }
 
 /* --------------------------------------------------- поворот кадра (настройка) */
-static uint8_t s_rot_deg;              /* 0 / 90 / 180 / 270 */
+static uint16_t s_rot_deg;             /* 0 / 90 / 180 / 270 (270 в uint8_t не влезает) */
 static uint8_t s_rot_buf[FB_LEN];      /* временный буфер для поворота */
 
 static bool fb_get(const uint8_t *b, int x, int y)
@@ -72,7 +72,7 @@ static void fb_put(uint8_t *b, int x, int y, bool black)
     }
 }
 
-void display_set_rotation(uint8_t deg)
+void display_set_rotation(uint16_t deg)
 {
     if (deg != 90 && deg != 180 && deg != 270) {
         deg = 0;

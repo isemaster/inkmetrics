@@ -19,7 +19,8 @@
 #define SETTINGS_PING_LEN 32
 
 typedef struct {
-    uint8_t rotation;          /* 0, 90, 180, 270 */
+    uint16_t rotation;         /* 0, 90, 180, 270 (в uint8_t 270 не помещается — было так,
+                                  и поворот 270° не сохранялся: 270 → 14 → 0) */
     bool    disk_write_lock;   /* true — диск только для чтения */
     char    ping_target[SETTINGS_PING_LEN];   /* имя цели пинга, например "ya.ru" */
 } settings_t;
@@ -27,9 +28,9 @@ typedef struct {
 void             settings_init(void);          /* читает NVS, при первом запуске ставит умолчания */
 const settings_t *settings_get(void);
 
-void settings_set_rotation(uint8_t deg);       /* 0/90/180/270, остальное приводится к 0 */
+void settings_set_rotation(uint16_t deg);      /* 0/90/180/270, остальное приводится к 0 */
 void settings_set_disk_write_lock(bool lock);
 void settings_set_ping_target(const char *name);
-uint8_t settings_rotation_next(void);          /* следующий поворот по кругу, возвращает новый */
+uint16_t settings_rotation_next(void);         /* следующий поворот по кругу, возвращает новый */
 
 #endif /* SETTINGS_H */

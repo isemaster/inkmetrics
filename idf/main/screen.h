@@ -63,7 +63,7 @@ typedef struct {
 
     /* настройки (страница SETTINGS) */
     const char *fw;
-    uint8_t     rotation;          /* 0 / 90 / 180 / 270 */
+    uint16_t    rotation;          /* 0 / 90 / 180 / 270 */
     bool        disk_write_lock;   /* диск хоста только для чтения */
 } screen_state_t;
 

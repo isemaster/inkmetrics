@@ -55,7 +55,10 @@
 #define USB_NET_MASK  "255.255.255.0"
 #define USB_NET_GW    "192.168.7.1"
 #define USB_NET_MTU   1514           /* кадр без FCS: 14 (Ethernet) + 1500 (MTU) */
-#define NET_DHCP_TIMEOUT_MS 15000    /* сколько ждём адрес от роутера локальной сети */
+/* Сколько ждём адрес от роутера (раздача на ПК), прежде чем стать DHCP-сервером для хоста.
+   Было 15 с: хост всё это время оставался без адреса, а Windows просит адрес не каждую
+   секунду — чем позже поднимется наш сервер, тем позже появится страница. */
+#define NET_DHCP_TIMEOUT_MS 6000
 #define NET_DHCP_RETRY_MS   60000    /* в аварийном режиме — как часто пробуем снова */
 #define NET_DHCP_RETRY_WINDOW_MS 8000   /* сколько ждём ответ в повторной попытке */
 #define NET_WATCH_MS        2000     /* такт сторожа адресации (проверяем, не появился ли DHCP-сервер) */
@@ -167,6 +170,7 @@ static volatile uint32_t s_reconnects;   /* сколько раз хост от�
    s_renew_wanted — пользователь попросил обновить адрес (страница /api/renew). */
 static volatile bool s_dhcp_answer;
 static volatile bool s_renew_wanted;
+static volatile uint32_t s_last_renew_s;   /* когда последний раз просили адрес по подсказке */
 
 #if CONFIG_TINYUSB_NET_MODE_NONE
 /* Диагностическая сборка (sdkconfig.diag): USB-сети нет, логи идут в USB Serial/JTAG.
@@ -737,6 +741,25 @@ static void enable_verbose_tags(void)
         включить уже после загрузки прибора (в том числе скриптом с его же диска). Повтор
         делаем только если страницу прибора не открывали NET_RETRY_IF_IDLE_S секунд — на время
         попытки аварийный адрес 192.168.7.1 пропадает. */
+/* Хост настроен на другую подсеть — значит адрес даёт он нам, а не мы ему. Так бывает
+   после включения раздачи на ПК: его адаптер прибора становится 192.168.137.1, и наш
+   192.168.7.1 в этой сети не виден ни ему, ни нам. Самоназначенный 169.254.x подсказкой
+   НЕ считаем: это просто «на ПК адреса нет», и обслуживать его должны мы. */
+static bool host_in_other_subnet(const char *ip)
+{
+    unsigned a = 0, b = 0, c = 0, d = 0;
+    if (!ip || sscanf(ip, "%u.%u.%u.%u", &a, &b, &c, &d) != 4) {
+        return false;
+    }
+    if (a == 169 && b == 254) {
+        return false;                     /* APIPA */
+    }
+    if (a == 192 && b == 168 && c == 7) {
+        return false;                     /* наша аварийная подсеть */
+    }
+    return true;
+}
+
 static bool lease_present(void)
 {
     esp_netif_ip_info_t ip = {0};
@@ -773,7 +796,15 @@ static void enter_emergency_mode(void)
     esp_netif_str_to_ip4(USB_NET_IP, &st.ip);
     esp_netif_str_to_ip4(USB_NET_GW, &st.gw);
     esp_netif_str_to_ip4(USB_NET_MASK, &st.netmask);
-    esp_netif_set_ip_info(s_netif, &st);
+    /* Порядок обязателен: esp_netif_set_ip_info() отказывает
+       (ESP_ERR_ESP_NETIF_DHCP_NOT_STOPPED), пока DHCP-сервер не остановлен —
+       esp_netif_lwip.c:1981. Остановка «не запущенного» сервера ошибку не даёт. */
+    esp_netif_dhcps_stop(s_netif);
+    esp_err_t perr = esp_netif_set_ip_info(s_netif, &st);
+    if (perr != ESP_OK) {
+        ESP_LOGE(TAG, "аварийный адрес не встал: %s", esp_err_to_name(perr));
+        diag_step("аварийный адрес НЕ встал: %s", esp_err_to_name(perr));
+    }
     esp_err_t err = esp_netif_dhcps_start(s_netif);
     s_net_mode = NET_MODE_EMERGENCY;
     net_info_refresh();
@@ -843,6 +874,19 @@ static void net_addr_task(void *arg)
            52 с из 60, а Windows просит адрес раз в несколько минут.
            В клиента возвращаемся только по делу: чужой DHCP-сервер ответил нам
            (s_dhcp_answer) либо пользователь попросил обновить адрес (s_renew_wanted). */
+        /* Подсказка от хоста: он в другой подсети — просим адрес у него (не чаще раза
+           в минуту, чтобы не дёргать сеть, если он адрес не даёт). */
+        selfcheck_status_t hs;
+        selfcheck_status(&hs);
+        uint32_t now_s = (uint32_t)(esp_timer_get_time() / 1000000);
+        if (hs.host_known && host_in_other_subnet(hs.host) &&
+            now_s - s_last_renew_s > 60u) {
+            s_last_renew_s = now_s;
+            s_renew_wanted = true;
+            ESP_LOGI(TAG, "хост %s в другой подсети — прошу адрес заново", hs.host);
+            diag_step("хост %s в другой подсети — прошу адрес заново", hs.host);
+        }
+
         if (!s_dhcp_answer && !s_renew_wanted) {
             continue;
         }
@@ -861,7 +905,17 @@ static void start_usb_net(void)
     /* Прибор — DHCP-КЛИЕНТ: адрес, шлюз и DNS выдаёт роутер локальной сети
        (запросы уходят через мост Windows на ПК). Аварийный статический адрес
        включается в net_addr_task, если адреса нет. */
-    base.flags = ESP_NETIF_FLAG_AUTOUP;
+    /* Флаги принципиальны (нашли 17.09 по «чёрному ящику»):
+       ESP_NETIF_INHERENT_DEFAULT_ETH() даёт DHCP_CLIENT, но мы флаги перезаписываем —
+       и остаётся только AUTOUP. Без флага ESP_NETIF_DHCP_SERVER esp_netif при создании
+       netif НЕ создаёт объект DHCP-сервера (esp_netif_lwip.c: dhcps_new() только под этим
+       флагом), поэтому esp_netif_dhcps_start() всегда отвечал
+       ESP_ERR_ESP_NETIF_DHCPS_START_FAILED («DHCP server cannot be started» в логе) —
+       хост не получал адрес, отсюда и «нет пинга», и недоступная страница.
+       Оба флага (CLIENT и SERVER) IDF запрещает («DHCP server and client cannot be
+       configured together»), поэтому ставим SERVER, а DHCP-клиента включаем вызовом
+       esp_netif_dhcpc_start(): он флага не требует и работает (esp_netif_lwip.c:1602). */
+    base.flags = (esp_netif_flags_t)(ESP_NETIF_DHCP_SERVER | ESP_NETIF_FLAG_AUTOUP);
     base.if_key = "USB_DEF";
     base.if_desc = "usb";
     base.route_prio = 90;

@@ -36,7 +36,7 @@ void display_show(bool force_full);
 /* Инвертировать весь кадровый буфер (белое↔чёрное) — аварийный вид. */
 void display_invert(void);
 /* Поворот кадра: 0 / 90 / 180 / 270 градусов (настройка прибора). */
-void display_set_rotation(uint8_t deg);
+void display_set_rotation(uint16_t deg);
 void display_px(int x, int y, bool black);
 void display_hline(int x, int y, int len, bool black);
 void display_rect(int x, int y, int w, int h, bool filled, bool black);

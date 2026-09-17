@@ -23,6 +23,16 @@ static settings_t s_st = {
 static nvs_handle_t s_nvs;
 static bool s_nvs_ok;
 
+/* Поворот храним 16 битами: 270 в uint8_t не помещается (270 → 14 → «нет поворота»). */
+static void save_rot(const char *key, uint16_t v)
+{
+    if (!s_nvs_ok) {
+        return;
+    }
+    nvs_set_u16(s_nvs, key, v);
+    nvs_commit(s_nvs);
+}
+
 static void save_u8(const char *key, uint8_t v)
 {
     if (!s_nvs_ok) {
@@ -50,9 +60,21 @@ void settings_init(void)
     }
     s_nvs_ok = true;
 
-    uint8_t rot = 0;
-    if (nvs_get_u8(s_nvs, KEY_ROT, &rot) == ESP_OK) {
-        s_st.rotation = (rot == 90 || rot == 180 || rot == 270) ? rot : 0;
+    uint16_t rot = 0;
+    esp_err_t rerr = nvs_get_u16(s_nvs, KEY_ROT, &rot);
+    if (rerr != ESP_OK) {
+        /* запись, сделанная прежней версией (поворот лежал в u8): читаем как u8 */
+        uint8_t old = 0;
+        rerr = nvs_get_u8(s_nvs, KEY_ROT, &old);
+        rot = old;
+        if (rerr != ESP_OK) {
+            rot = 0;
+        }
+    }
+    if (rot == 90 || rot == 180 || rot == 270) {
+        s_st.rotation = rot;
+    } else {
+        s_st.rotation = 0;
     }
     uint8_t wlk = 0;
     if (nvs_get_u8(s_nvs, KEY_WLK, &wlk) == ESP_OK) {
@@ -74,20 +96,20 @@ const settings_t *settings_get(void)
     return &s_st;
 }
 
-void settings_set_rotation(uint8_t deg)
+void settings_set_rotation(uint16_t deg)
 {
     if (deg != 90 && deg != 180 && deg != 270) {
         deg = 0;
     }
     s_st.rotation = deg;
     display_set_rotation(deg);
-    save_u8(KEY_ROT, deg);
+    save_rot(KEY_ROT, deg);
     ESP_LOGI(TAG, "поворот экрана: %u", (unsigned)deg);
 }
 
-uint8_t settings_rotation_next(void)
+uint16_t settings_rotation_next(void)
 {
-    uint8_t next = 0;
+    uint16_t next = 0;
     switch (s_st.rotation) {
     case 0:   next = 90;  break;
     case 90:  next = 180; break;
