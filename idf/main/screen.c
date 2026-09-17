@@ -155,8 +155,8 @@ static void show_summary(const screen_state_t *st)
 
     int y = 0;
 
-    /* 1. рамка: живы ли метрики хоста */
-    frame_title(st->agent_ok ? "ONLINE" : "НЕТ СВЯЗИ", y, h_frame);
+    /* 1. рамка: живы ли метрики хоста (интерфейс прибора — только латиница) */
+    frame_title(st->agent_ok ? "ONLINE" : "OFFLINE", y, h_frame);
     y += h_frame + gap;
 
     /* 2. подписи карт и 3. их температуры — самое крупное на экране */
