@@ -339,7 +339,8 @@ static const char INDEX_HTML[] =
     "const fmt=(v,u)=>v>=0?(v+u):'-';"
     "const im=s.ingest||{have:0};"
     "const met=im.have?(('CPU '+fmt(im.cpu,'%')+' RAM '+fmt(im.mem,'%')+' диск '+fmt(im.disk,'%'))"
-    "+(im.gpu>=0?(' GPU '+im.gpu+'%'+(im.gpu_temp>=0?(' '+im.gpu_temp+'C'):'')):'')"
+    "+(im.gpu0>=0?(' GPU0 '+im.gpu0+'%'+(im.gpu0_temp>=0?(' '+im.gpu0_temp+'C'):'')):'')"
+    "+(im.gpu1>=0?(' GPU1 '+im.gpu1+'%'+(im.gpu1_temp>=0?(' '+im.gpu1_temp+'C'):'')):'')"
     "+(im.cpu_temp>=0?(' TMP '+im.cpu_temp+'C'):'')"
     "+', '+im.age+' с назад'+(im.fresh?'':' (УСТАРЕЛО)')):'нет данных от агента';"
     "const met2=im.have?((im.ping_ok?('пинг '+im.ping_ms+' мс'):'пинг: нет ответа')"
@@ -591,7 +592,9 @@ static esp_err_t state_get(httpd_req_t *req)
         "\"disk_kb\":%u,\"wlock\":%u,\"rotation\":%u,"
         "\"silence_s\":%u,\"fallback_left_s\":%u,\"http\":%u,"
         "\"ingest\":{\"have\":%u,\"fresh\":%u,\"age\":%u,\"count\":%u,\"host\":\"%s\","
-        "\"cpu\":%.0f,\"mem\":%.0f,\"disk\":%.0f,\"gpu\":%.0f,\"gpu_temp\":%d,\"gpu_mem\":%.0f,"
+        "\"cpu\":%.0f,\"mem\":%.0f,\"disk\":%.0f,\"gpu_count\":%d,"
+        "\"gpu0\":%.0f,\"gpu0_temp\":%d,\"gpu0_mem\":%.0f,"
+        "\"gpu1\":%.0f,\"gpu1_temp\":%d,\"gpu1_mem\":%.0f,"
         "\"cpu_temp\":%d,\"ping_ok\":%u,\"ping_ms\":%u,\"up_h\":%.1f,\"tcp\":%d,\"smart\":\"%s\"}}",
         fw_version_str(), esp_timer_get_time() / 1000000,
         (unsigned)esp_get_free_heap_size(), s_link_up ? 1u : 0u, (unsigned)s_reconnects,
@@ -608,7 +611,9 @@ static esp_err_t state_get(httpd_req_t *req)
         (unsigned)(im.have ? 1 : 0), (unsigned)(im.fresh ? 1 : 0), (unsigned)im.age_s,
         (unsigned)im.count, im.host,
         (double)im.cpu_pct, (double)im.mem_pct, (double)im.disk_pct,
-        (double)im.gpu_pct, im.gpu_temp_c, (double)im.gpu_mem_pct,
+        im.gpu_count,
+        (double)im.gpu_pct[0], im.gpu_temp_c[0], (double)im.gpu_mem_pct[0],
+        (double)im.gpu_pct[1], im.gpu_temp_c[1], (double)im.gpu_mem_pct[1],
         im.cpu_temp_c, (unsigned)im.ping_ok, (unsigned)im.ping_ms, (double)im.up_h,
         (int)im.tcp_est, im.smart);
     httpd_resp_set_type(req, "application/json");

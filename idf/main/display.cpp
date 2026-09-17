@@ -107,19 +107,38 @@ static void apply_rotation(void)
 }
 
 /* --------------------------------------------------------------- шрифты */
+/* Таблица одного шрифта. Коды символов и биты лежат отдельными массивами
+   (см. tools/make_font.py): это убирает выравнивание структур и даёт простой
+   двоичный поиск. ink_top/ink_h — где внутри клетки лежат чернила. */
 typedef struct {
-    const void *table;
+    const uint16_t *cp;
+    const uint8_t  *bits;      /* плоский: биты знака i = bits + i*bytes */
     int count;
     int cell_w;
     int cell_h;
     int bytes;
-    bool big;
+    int ink_top;
+    int ink_h;
 } font_ref_t;
 
-static const font_ref_t FONT_SMALL = { font_small, FONT_SMALL_COUNT, FONT_SMALL_W,
-                                       FONT_SMALL_H, FONT_SMALL_BYTES, false };
-static const font_ref_t FONT_BIG   = { font_big, FONT_BIG_COUNT, FONT_BIG_W,
-                                       FONT_BIG_H, FONT_BIG_BYTES, true };
+static const font_ref_t FONT_LIST[DISP_FONTS] = {
+    { font_small_cp, (const uint8_t *)font_small_bits, FONT_SMALL_COUNT, FONT_SMALL_W,
+      FONT_SMALL_H, FONT_SMALL_BYTES, FONT_SMALL_INK_TOP, FONT_SMALL_INK_H },
+    { font_mid_cp,   (const uint8_t *)font_mid_bits,   FONT_MID_COUNT,   FONT_MID_W,
+      FONT_MID_H,   FONT_MID_BYTES,   FONT_MID_INK_TOP,   FONT_MID_INK_H },
+    { font_big_cp,   (const uint8_t *)font_big_bits,   FONT_BIG_COUNT,   FONT_BIG_W,
+      FONT_BIG_H,   FONT_BIG_BYTES,   FONT_BIG_INK_TOP,   FONT_BIG_INK_H },
+    { font_huge_cp,  (const uint8_t *)font_huge_bits,  FONT_HUGE_COUNT,  FONT_HUGE_W,
+      FONT_HUGE_H,  FONT_HUGE_BYTES,  FONT_HUGE_INK_TOP,  FONT_HUGE_INK_H },
+};
+
+static const font_ref_t *font_ref(int font)
+{
+    if (font < 0 || font >= DISP_FONTS) {
+        font = DISP_F_SMALL;
+    }
+    return &FONT_LIST[font];
+}
 
 /* В таблицах глифы отсортированы по коду — ищем двоичным поиском. */
 static const uint8_t *font_lookup(const font_ref_t *f, uint16_t cp)
@@ -127,15 +146,9 @@ static const uint8_t *font_lookup(const font_ref_t *f, uint16_t cp)
     int lo = 0, hi = f->count - 1;
     while (lo <= hi) {
         int mid = (lo + hi) / 2;
-        uint16_t cur;
-        if (f->big) {
-            cur = ((const font_big_glyph_t *)f->table)[mid].cp;
-        } else {
-            cur = ((const font_small_glyph_t *)f->table)[mid].cp;
-        }
+        uint16_t cur = f->cp[mid];
         if (cur == cp) {
-            return f->big ? ((const font_big_glyph_t *)f->table)[mid].bits
-                          : ((const font_small_glyph_t *)f->table)[mid].bits;
+            return f->bits + (size_t)mid * (size_t)f->bytes;
         }
         if (cur < cp) {
             lo = mid + 1;
@@ -173,8 +186,11 @@ static int utf8_next(const char **s, uint16_t *cp)
     return 1;
 }
 
+/* Рисование строки. y — верх ЧЕРНИЛ: глиф кладём так, чтобы его чернила начинались
+   ровно на y (внутри клетки сверху есть пустые строки — их и компенсируем). */
 static void draw_text(const font_ref_t *f, int x, int y, const char *utf8)
 {
+    int y0 = y - f->ink_top;
     while (*utf8) {
         uint16_t cp = 0;
         if (utf8_next(&utf8, &cp) == 0) {
@@ -186,7 +202,7 @@ static void draw_text(const font_ref_t *f, int x, int y, const char *utf8)
                 for (int gx = 0; gx < f->cell_w; gx++) {
                     int i = gy * f->cell_w + gx;
                     if (bits[i / 8] & (1u << (7 - (i % 8)))) {
-                        fb_px(x + gx, y + gy, true);
+                        fb_px(x + gx, y0 + gy, true);
                     }
                 }
             }
@@ -298,6 +314,11 @@ void display_invert(void)
     }
 }
 
+void display_force_full(void)
+{
+    s_need_full = true;
+}
+
 void display_px(int x, int y, bool black)
 {
     fb_px(x, y, black);
@@ -326,22 +347,59 @@ void display_rect(int x, int y, int w, int h, bool filled, bool black)
     }
 }
 
+int display_text_w(int font, const char *utf8)
+{
+    const font_ref_t *f = font_ref(font);
+    return display_utf8_len(utf8) * f->cell_w;
+}
+
+int display_text_h(int font)
+{
+    return font_ref(font)->ink_h;
+}
+
+int display_text_adv(int font)
+{
+    return font_ref(font)->cell_w;
+}
+
+void display_text_f(int font, int x, int y, const char *utf8)
+{
+    draw_text(font_ref(font), x, y, utf8);
+}
+
+void display_text_center_x(int font, int x0, int x1, int y, const char *utf8)
+{
+    int w = display_text_w(font, utf8);
+    display_text_f(font, x0 + ((x1 - x0) - w) / 2, y, utf8);
+}
+
+void display_text_center(int font, int y, const char *utf8)
+{
+    display_text_center_x(font, 0, DISP_W, y, utf8);
+}
+
+void display_text_right(int font, int y, const char *utf8)
+{
+    display_text_f(font, DISP_W - 1 - display_text_w(font, utf8), y, utf8);
+}
+
 void display_text(int x, int y, const char *utf8)
 {
-    draw_text(&FONT_SMALL, x, y, utf8);
+    display_text_f(DISP_F_SMALL, x, y, utf8);
 }
 
 void display_text_big(int x, int y, const char *utf8)
 {
-    draw_text(&FONT_BIG, x, y, utf8);
+    display_text_f(DISP_F_BIG, x, y, utf8);
 }
 
 int display_text_advance(void)
 {
-    return FONT_SMALL.cell_w;
+    return display_text_adv(DISP_F_SMALL);
 }
 
 int display_text_big_advance(void)
 {
-    return FONT_BIG.cell_w;
+    return display_text_adv(DISP_F_BIG);
 }

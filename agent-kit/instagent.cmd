@@ -291,28 +291,34 @@ function Get-CpuTemp {
 
 function Get-Gpu {
     # GPU load / temperature / memory through nvidia-smi (if present and the driver is alive).
-    # No nvidia-smi or a non-NVIDIA card: the fields are omitted and the device shows GPU N/A.
+    # Returns one entry per card, in the order nvidia-smi lists them. No nvidia-smi,
+    # a non-NVIDIA card or a dead driver: the list is empty and the device shows dashes
+    # in both slots (an empty list is not zero load - it is "unknown").
     try {
         $smi = Get-Command nvidia-smi -ErrorAction Stop
     } catch {
-        return $null
+        return @()
     }
     try {
-        $line = & $smi.Source --query-gpu=utilization.gpu,temperature.gpu,memory.used,memory.total `
-                              --format=csv,noheader,nounits 2>$null | Select-Object -First 1
-        if (-not $line) { return $null }
-        $p = $line -split ','
-        if ($p.Count -lt 4) { return $null }
-        $used  = [double]$p[2].Trim()
-        $total = [double]$p[3].Trim()
-        $memPct = if ($total -gt 0) { [math]::Round(($used / $total) * 100, 1) } else { $null }
-        return @{
-            util = [double]$p[0].Trim()
-            temp = [int]$p[1].Trim()
-            mem  = $memPct
+        $lines = & $smi.Source --query-gpu=index,utilization.gpu,temperature.gpu,memory.used,memory.total `
+                               --format=csv,noheader,nounits 2>$null
+        if (-not $lines) { return @() }
+        $out = @()
+        foreach ($line in $lines) {
+            $p = $line -split ','
+            if ($p.Count -lt 5) { continue }
+            $used  = [double]$p[3].Trim()
+            $total = [double]$p[4].Trim()
+            $memPct = if ($total -gt 0) { [math]::Round(($used / $total) * 100, 1) } else { $null }
+            $out += @{
+                util = [double]$p[1].Trim()
+                temp = [int]$p[2].Trim()
+                mem  = $memPct
+            }
         }
+        return $out
     } catch { }
-    return $null
+    return @()
 }
 
 function Get-SmartStatus {
@@ -340,7 +346,9 @@ function Build-Json {
     $tcp  = Get-TcpEstablished
     $temp = Get-CpuTemp
     $smart = Get-SmartStatus
-    $gpu  = Get-Gpu
+    $gpus = @(Get-Gpu)
+    $g0 = if ($gpus.Count -ge 1) { $gpus[0] } else { $null }
+    $g1 = if ($gpus.Count -ge 2) { $gpus[1] } else { $null }
 
     $obj = @{
         hostname      = $HostName
@@ -348,9 +356,13 @@ function Build-Json {
         cpu_percent   = $cpu
         mem_percent   = $mem
         disk_percent  = $disk
-        gpu_percent   = if ($gpu) { $gpu.util } else { $null }
-        gpu_temp      = if ($gpu) { $gpu.temp } else { $null }
-        gpu_mem_percent = if ($gpu) { $gpu.mem } else { $null }
+        gpu_count     = $gpus.Count
+        gpu0_percent  = if ($g0) { $g0.util } else { $null }
+        gpu0_temp     = if ($g0) { $g0.temp } else { $null }
+        gpu0_mem_percent = if ($g0) { $g0.mem } else { $null }
+        gpu1_percent  = if ($g1) { $g1.util } else { $null }
+        gpu1_temp     = if ($g1) { $g1.temp } else { $null }
+        gpu1_mem_percent = if ($g1) { $g1.mem } else { $null }
         ping_ok       = $ping.ok
         ping_ms       = $ping.ms
         uptime_hours  = $up
