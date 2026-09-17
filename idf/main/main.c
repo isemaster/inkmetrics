@@ -58,7 +58,7 @@
 #define NET_DHCP_TIMEOUT_MS 15000    /* сколько ждём адрес от роутера локальной сети */
 #define NET_DHCP_RETRY_MS   60000    /* в аварийном режиме — как часто пробуем снова */
 #define NET_DHCP_RETRY_WINDOW_MS 8000   /* сколько ждём ответ в повторной попытке */
-#define NET_RETRY_IF_IDLE_S 20       /* повторяем только если страницу не открывали столько секунд */
+#define NET_WATCH_MS        2000     /* такт сторожа адресации (проверяем, не появился ли DHCP-сервер) */
 #define PING_TARGET_NAME "ya.ru"     /* цель пинга по умолчанию (значение хранится в настройках) */
 #define PING_TARGET_IP   "77.88.55.242"   /* запасной адрес, если DNS не отвечает */
 #define BOOT_GPIO     0
@@ -109,7 +109,11 @@ static void net_info_refresh(void)
         /* Свой адрес совпал со шлюзом — так бывает, когда раздача на ПК настроена
            наполовину: адрес выдал её DHCP, а шлюзом числится он же. Сеть в этом
            состоянии не работает: ни пинг, ни страница. Видно на экране (ADDR и GW). */
-        conflict = (ip.ip.addr != 0 && ip.ip.addr == ip.gw.addr);
+        /* Конфликт считаем ТОЛЬКО когда адрес дал внешний DHCP (режим ROUTER).
+           В аварийном режиме адрес и шлюз совпадают ПО ЗАМЫСЛУ: шлюз для хоста — мы
+           сами (192.168.7.1). Из-за этого 17.09 экран показывал «IP CONFLICT» вместо
+           «EMERGENCY» и врал про причину отказа сети. */
+        conflict = (s_net_mode == NET_MODE_ROUTER && ip.ip.addr != 0 && ip.ip.addr == ip.gw.addr);
     }
     if (conflict != s_ip_conflict) {
         s_ip_conflict = conflict;
@@ -157,6 +161,13 @@ static volatile uint32_t s_rx_bytes;
 static volatile uint32_t s_tx_bytes;
 static volatile uint32_t s_reconnects;   /* сколько раз хост отключался */
 
+/* Признаки для смены адресации (см. net_addr_task):
+   s_dhcp_answer  — в сети появился ЧУЖОЙ DHCP-сервер (раздача на ПК): он предложил
+                    адрес именно нам, значит прибору есть смысл снова стать клиентом;
+   s_renew_wanted — пользователь попросил обновить адрес (страница /api/renew). */
+static volatile bool s_dhcp_answer;
+static volatile bool s_renew_wanted;
+
 #if CONFIG_TINYUSB_NET_MODE_NONE
 /* Диагностическая сборка (sdkconfig.diag): USB-сети нет, логи идут в USB Serial/JTAG.
    Нужна, чтобы понять, где именно ломается запуск, не имея UART-адаптера. */
@@ -179,12 +190,43 @@ static void usb_free_rx(void *h, void *buffer)
     free(buffer);
 }
 
+/* Чужой DHCP-сервер в сети (раздача интернета на ПК, роутер): в кадре от хоста
+   приходит ответ DHCP (op=2, OFFER/ACK) на НАШ MAC. Это единственный надёжный признак,
+   что «снаружи» кто-то готов дать нам адрес: гадать по таймеру нельзя (см. З-37). */
+static void dhcp_answer_note(const uint8_t *f, uint16_t len)
+{
+    if (len < 14 + 20 + 8 + 44) {
+        return;                                  /* короче кадра DHCP быть не может */
+    }
+    if (f[12] != 0x08 || f[13] != 0x00 || f[14 + 9] != 17) {
+        return;                                  /* не IPv4/UDP */
+    }
+    uint16_t ihl = (uint16_t)((f[14] & 0x0Fu) * 4u);
+    const uint8_t *udp  = f + 14 + ihl;
+    const uint8_t *dhcp = udp + 8;
+    if (udp[0] != 0x00 || udp[1] != 0x43) {       /* порт отправителя 67 = сервер */
+        return;
+    }
+    if (dhcp[0] != 2) {                           /* 2 = BOOTREPLY (ответ сервера) */
+        return;
+    }
+    if (memcmp(dhcp + 28, tud_network_mac_address, 6) != 0) {
+        return;                                   /* предложение не нам */
+    }
+    if (!s_dhcp_answer) {
+        s_dhcp_answer = true;
+        ESP_LOGI(TAG, "в сети есть DHCP-сервер (ответ на наш MAC) — вернусь в клиента");
+        diag_step("внешний DHCP-сервер ответил нам — попрошу адрес заново");
+    }
+}
+
 /* хост прислал кадр — отдаём его в lwIP */
 bool tud_network_recv_cb(const uint8_t *src, uint16_t size)
 {
     s_rx_frames++;
     s_rx_bytes += size;
     selfcheck_host_frame(src, size);   /* признак жизни хоста + разбор ARP/DHCP */
+    dhcp_answer_note(src, size);       /* кто-то предлагает нам адрес по DHCP? */
     if (size == 0) {
         tud_network_recv_renew();
         return true;
@@ -277,7 +319,8 @@ static const char INDEX_HTML[] =
     "<table id=\"t\"></table>"
     "<p><a href=\"/setup\">Настройки прибора</a> · "
     "<a href=\"/api/state\">API (JSON)</a> · "
-    "<a href=\"/api/boot\">Уйти в режим загрузки сейчас</a></p>"
+    "<a href=\"/api/boot\">Уйти в режим загрузки сейчас</a> · "
+    "<a href=\"/api/renew\">Просить адрес заново</a></p>"
     "<script>"
     "function hostTime(){const d=new Date();"
     "fetch('/api/host-time?unix='+Math.floor(d.getTime()/1000)+'&tz='+(-d.getTimezoneOffset()))"
@@ -543,9 +586,18 @@ static esp_err_t state_get(httpd_req_t *req)
     return httpd_resp_send(req, json, n);
 }
 
+/* «Проси адрес заново» — кнопка на странице прибора: нужна, когда раздачу на ПК
+   включили позже (скриптом с диска прибора), а USB передёргивать не хочется. */
 /* Подсказка времени от браузера хоста: страница открыта на хосте — берём его часы.
    Нужна потому, что на стоковой Windows служба w32time не отдаёт NTP (проверено
    16.09: UDP 123 не отвечает), а время на экране нужно. */
+static esp_err_t renew_get(httpd_req_t *req)
+{
+    selfcheck_http_hit();
+    s_renew_wanted = true;
+    return httpd_resp_send(req, "ok: прошу адрес заново\n", HTTPD_RESP_USE_STRLEN);
+}
+
 static esp_err_t hosttime_get(httpd_req_t *req)
 {
     selfcheck_http_hit();
@@ -578,12 +630,14 @@ static void start_http(void)
     httpd_uri_t uri_state = { .uri = "/api/state", .method = HTTP_GET, .handler = state_get };
     httpd_uri_t uri_boot  = { .uri = "/api/boot", .method = HTTP_GET, .handler = boot_get };
     httpd_uri_t uri_time  = { .uri = "/api/host-time", .method = HTTP_GET, .handler = hosttime_get };
+    httpd_uri_t uri_renew = { .uri = "/api/renew", .method = HTTP_GET, .handler = renew_get };
     ESP_ERROR_CHECK(httpd_register_uri_handler(server, &uri_index));
     ESP_ERROR_CHECK(httpd_register_uri_handler(server, &uri_setup));
     ESP_ERROR_CHECK(httpd_register_uri_handler(server, &uri_sset));
     ESP_ERROR_CHECK(httpd_register_uri_handler(server, &uri_state));
     ESP_ERROR_CHECK(httpd_register_uri_handler(server, &uri_boot));
     ESP_ERROR_CHECK(httpd_register_uri_handler(server, &uri_time));
+    ESP_ERROR_CHECK(httpd_register_uri_handler(server, &uri_renew));
     selfcheck_http_up(true);
     ESP_LOGI(TAG, "HTTP-сервер поднят: http://" USB_NET_IP "/");
 }
@@ -762,7 +816,7 @@ static void net_addr_task(void *arg)
     /* Сторож: адрес потеряли или раздачу на ПК включили позже — прибор должен подхватить
        её сам, без передёргивания USB (иначе он навсегда останется на 192.168.7.1). */
     while (true) {
-        vTaskDelay(pdMS_TO_TICKS(NET_DHCP_RETRY_MS));
+        vTaskDelay(pdMS_TO_TICKS(NET_WATCH_MS));
 
         if (s_net_mode == NET_MODE_ROUTER) {
             if (lease_present() && !s_ip_conflict) {
@@ -782,14 +836,21 @@ static void net_addr_task(void *arg)
             continue;
         }
 
-        /* аварийный режим: пробуем снова, но не мешая тому, кто сейчас смотрит страницу */
-        selfcheck_status_t sc;
-        selfcheck_status(&sc);
-        if (sc.http_age_s != SELFCHECK_NEVER && sc.http_age_s < NET_RETRY_IF_IDLE_S) {
+        /* АВАРИЙНЫЙ РЕЖИМ: свой адрес 192.168.7.1 и DHCP-сервер для хоста работают
+           ПОСТОЯННО и ничего не гасим. Это и была причина «хост без адреса» (З-37):
+           прежний повтор каждую минуту снимал сервер на 8 с, а после первой попытки он
+           мог не подняться вовсе — окно, в которое хост мог получить адрес, было
+           52 с из 60, а Windows просит адрес раз в несколько минут.
+           В клиента возвращаемся только по делу: чужой DHCP-сервер ответил нам
+           (s_dhcp_answer) либо пользователь попросил обновить адрес (s_renew_wanted). */
+        if (!s_dhcp_answer && !s_renew_wanted) {
             continue;
         }
-        ESP_LOGI(TAG, "аварийный режим: пробую получить адрес заново");
-        diag_step("аварийный режим: повторная попытка DHCP");
+        bool by_hand = s_renew_wanted;
+        s_renew_wanted = false;
+        s_dhcp_answer = false;
+        ESP_LOGI(TAG, "прошу адрес заново (%s)", by_hand ? "просьба со страницы" : "ответил внешний DHCP");
+        diag_step("прошу адрес заново: %s", by_hand ? "просьба со страницы" : "внешний DHCP-сервер");
         retry_dhcp();
     }
 }

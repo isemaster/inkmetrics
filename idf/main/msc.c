@@ -88,7 +88,36 @@ bool tud_msc_test_unit_ready_cb(uint8_t lun)
     return true;
 }
 
-/* Как диск себя называет хосту. */
+/* Как диск себя называет хосту.
+ *
+ * ГРАБЛЯ (нашли 17.09 по реестру Windows): отдаём свой ответ целиком через
+ * tud_msc_inquiry2_cb, потому что в ответе INQUIRY есть бит «съёмный носитель» (RMB),
+ * и стек TinyUSB в этой версии выставляет его сам (msc_device.c:
+ * `inquiry_rsp->is_removable = 1`). При RMB=1 Windows заводит диск не как «Диск», а как
+ * «Дисковод гибких дисков»: служба sfloppy, буква A:, в Проводнике «Дискета (A:)» —
+ * то есть «флешки» на вид нет, хотя файлы на ней есть (SETUP.CMD читается).
+ * Доказательство: HKLM\SYSTEM\CurrentControlSet\Enum\USBSTOR показывает нашу сборку как
+ * `SFloppy&Ven_inkmetrics&Prod_monitor_disk` со службой sfloppy (и SuperFloppy=1), а
+ * Arduino-сборку — как `Disk&Ven_&Prod_` со службой disk (Windows давал ей букву E:).
+ * У Arduino-ядра TinyUSB был старше и бит не выставлял. Ставим RMB=0 — и Windows
+ * показывает обычный диск с буквой. */
+uint32_t tud_msc_inquiry2_cb(uint8_t lun, scsi_inquiry_resp_t *rsp, uint32_t bufsize)
+{
+    (void)lun;
+    if (!rsp || bufsize < sizeof(scsi_inquiry_resp_t)) {
+        return 0;                     /* не хватило места — пусть отвечает старый колбэк */
+    }
+    memset(rsp, 0, sizeof(*rsp));
+    rsp->peripheral_device_type = 0x00;   /* прямой доступ: обычный диск */
+    rsp->is_removable           = 0;      /* НЕ флоппи-гибкий: иначе Windows вешает sfloppy */
+    rsp->version                = 2;      /* SPC-2 */
+    rsp->response_data_format   = 2;
+    rsp->additional_length      = sizeof(scsi_inquiry_resp_t) - 5;
+    memcpy(rsp->vendor_id,   "inkmetrics ",     8);
+    memcpy(rsp->product_id,  "monitor disk", 12);
+    memcpy(rsp->product_rev, "1.0",          3);
+    return sizeof(scsi_inquiry_resp_t);
+}
 void tud_msc_inquiry_cb(uint8_t lun, uint8_t vendor_id[8], uint8_t product_id[16],
                         uint8_t product_rev[4])
 {

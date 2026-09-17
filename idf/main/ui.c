@@ -160,6 +160,31 @@ static void ui_task(void *arg)
         st.ping_min = pi.min_ms;
         st.ping_max = pi.max_ms;
 
+        /* В аварийном режиме (адреса от роутера нет) маршрута в интернет нет, и экран
+           показывал «NET NO ANSWER», хотя связь с ПК есть. Показываем то, что
+           действительно проверяется: пинг ХОСТА — его ведёт самопроверка
+           (selfcheck.c, цель 192.168.7.2 или адрес из ARP). 17.09: пользователь просил
+           «чтобы пинг был» — теперь он есть и в аварийном режиме. */
+        static char s_ping_host_target[24];
+        if (!router) {
+            selfcheck_ping_stat_t hp;
+            selfcheck_ping_stats(&hp);
+            snprintf(s_ping_host_target, sizeof(s_ping_host_target), "%s",
+                     sc.host_known && sc.host[0] ? sc.host : "192.168.7.2");
+            uint16_t hist[SCREEN_PING_LINES];
+            int n = selfcheck_rtt_history(hist, SCREEN_PING_LINES);
+            st.ping_target = s_ping_host_target;
+            st.ping_ok = (hp.min_ms > 0);          /* был хоть один ответ */
+            st.ping_count = n > SCREEN_PING_LINES ? SCREEN_PING_LINES : n;
+            for (int i = 0; i < st.ping_count; i++) {
+                st.ping_last[i] = hist[i];
+            }
+            st.ping_loss_pct = hp.loss_pct;
+            st.ping_avg = hp.avg_ms;
+            st.ping_min = hp.min_ms;
+            st.ping_max = hp.max_ms;
+        }
+
         st.host_known = host_seen;
         st.host_ip = sc.host;
         st.host_name = selfcheck_host_name();
