@@ -8,7 +8,7 @@ echo.
 echo   inkmetrics: checking this PC, the agent, the tasks and the device...
 echo.
 
-powershell -NoProfile -ExecutionPolicy Bypass -File "%HERE%CHECK.PS1"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%HERE%CHECK.PS1" %*
 
 echo.
 echo   Done. The report file path is printed above (INKMETRICS-CHECK-REPORT.TXT in %%TEMP%%).

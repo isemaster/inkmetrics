@@ -10,13 +10,18 @@
 #   4. scheduled tasks: "inkmetrics agent" (metrics) and "inkmetrics ICS" (sharing)
 #   5. the agent process itself
 #   6. device address: ARP by the device MAC, then 192.168.7.1 and 192.168.137.1
-#   7. the metrics path: HTTP /api/state, a POST /ingest test, and whether ingest.count grew
+#   7. the metrics path: HTTP /api/state and whether the device really receives samples.
+#      By default the check only READS: it looks at ingest.count and ingest.age. With -Probe it
+#      also sends one synthetic sample (CPU/RAM 0) to prove the POST path - note that the device
+#      shows that probe on its screen until the real agent overwrites it, so do not read those
+#      numbers as the metrics of this PC.
 #
 # Verdicts: [OK] works, [FAIL] broken, [WARN] cannot tell / needs a look.
-# Nothing here changes the system (except the POST test, which only feeds the device
-# one sample of numbers - the agent overwrites them within a minute).
+# By default nothing is written anywhere: the check only reads. With -Probe it sends ONE
+# synthetic sample (CPU/RAM 0) to the device to test POST /ingest - those numbers then show
+# on the device screen until the real agent overwrites them, so do not read them as metrics.
 
-param()
+param([switch]$Probe)
 $ErrorActionPreference = 'Continue'
 
 $Here   = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -306,41 +311,57 @@ if ($found) {
         Result 'device /api/state parsed' 'OK' ('firmware ' + $fw)
         if ($state.PSObject.Properties.Name -contains 'ingest') {
             $ing = $state.ingest
-            $cnt = 'n/a'; $age = 'n/a'
-            if ($ing.PSObject.Properties.Name -contains 'count') { $cnt = $ing.count }
-            if ($ing.PSObject.Properties.Name -contains 'age')   { $age = $ing.age }
-            Result 'device receives metrics' 'OK' ('ingest.count=' + $cnt + ', age=' + $age + ' s')
+            $cnt = -1; $age = -1
+            if ($ing.PSObject.Properties.Name -contains 'count') { $cnt = [int]$ing.count }
+            if ($ing.PSObject.Properties.Name -contains 'age')   { $age = [int]$ing.age }
+            if ($cnt -le 0) {
+                Result 'device receives metrics' 'FAIL' 'ingest.count=0: the device has not received a single sample'
+                Hint 'No sample has ever arrived: the agent on this PC is not delivering (see agent.log and the task check above).'
+            } elseif ($age -le 180) {
+                Result 'device receives metrics' 'OK' ('ingest.count=' + $cnt + ', age=' + $age + ' s (fresh)')
+            } else {
+                Result 'device receives metrics' 'FAIL' ('last sample ' + $age + ' s ago (count=' + $cnt + '): nobody is sending')
+                Hint 'The device holds a stale sample. If it is the one this check sent with -Probe, it means the agent is still not sending: look at agent.log on this PC.'
+            }
         } else {
             Result 'device receives metrics' 'FAIL' '/api/state has no ingest block: the firmware is older than 0.4.0'
             Hint 'Flash the current build: only firmware 0.4.0+ has POST /ingest and the HOST SYS page.'
         }
 
-        $before = $null
-        try { $before = ($state.ingest.count) } catch { }
-        $body = '{"cpu_percent":37.0,"mem_percent":61.0,"ping_ok":true,"ping_ms":4}'
-        $post = $null
-        try {
-            $post = Invoke-WebRequest -Uri ('http://' + $found + '/ingest') -Method POST `
-                    -ContentType 'application/json' -Body $body -TimeoutSec 4 -UseBasicParsing -ErrorAction Stop
-        } catch { }
-        if ($post -and [int]$post.StatusCode -eq 200) {
-            Result 'POST /ingest accepted' 'OK' 'HTTP 200'
-        } elseif ($post) {
-            Result 'POST /ingest accepted' 'FAIL' ('HTTP ' + $post.StatusCode)
-        } else {
-            Result 'POST /ingest accepted' 'FAIL' 'no answer (404 means firmware without /ingest)'
-        }
-        Start-Sleep -Seconds 1
-        try {
-            $r2 = Invoke-WebRequest -Uri ('http://' + $found + '/api/state') -TimeoutSec 3 -UseBasicParsing -ErrorAction Stop
-            $s2 = $r2.Content | ConvertFrom-Json
-            $after = $s2.ingest.count
-            if ($before -ne $null -and [int]$after -gt [int]$before) {
-                Result 'counter grew after the test' 'OK' ('ingest.count ' + $before + ' -> ' + $after)
+        # The probe is opt-in on purpose: it writes to the device, and its numbers (CPU/RAM 0)
+        # then sit on the device screen until the real agent overwrites them.
+        if ($Probe) {
+            $before = $null
+            try { $before = ($state.ingest.count) } catch { }
+            $body = '{"cpu_percent":0.0,"mem_percent":0.0,"ping_ok":true,"ping_ms":4}'
+            $post = $null
+            try {
+                $post = Invoke-WebRequest -Uri ('http://' + $found + '/ingest') -Method POST `
+                        -ContentType 'application/json' -Body $body -TimeoutSec 4 -UseBasicParsing -ErrorAction Stop
+            } catch { }
+            if ($post -and [int]$post.StatusCode -eq 200) {
+                Result 'POST /ingest accepted' 'OK' 'HTTP 200 (probe sample sent, CPU/RAM 0)'
+            } elseif ($post) {
+                Result 'POST /ingest accepted' 'FAIL' ('HTTP ' + $post.StatusCode)
             } else {
-                Result 'counter grew after the test' 'WARN' ('ingest.count ' + $before + ' -> ' + $after + ' (the agent post may have landed between the two reads)')
+                Result 'POST /ingest accepted' 'FAIL' 'no answer (404 means firmware without /ingest)'
             }
-        } catch { Result 'counter grew after the test' 'WARN' 'cannot read /api/state again' }
+            Start-Sleep -Seconds 1
+            try {
+                $r2 = Invoke-WebRequest -Uri ('http://' + $found + '/api/state') -TimeoutSec 3 -UseBasicParsing -ErrorAction Stop
+                $s2 = $r2.Content | ConvertFrom-Json
+                $after = $s2.ingest.count
+                if ($before -ne $null -and [int]$after -gt [int]$before) {
+                    Result 'counter grew after the probe' 'OK' ('ingest.count ' + $before + ' -> ' + $after)
+                } else {
+                    Result 'counter grew after the probe' 'WARN' ('ingest.count ' + $before + ' -> ' + $after)
+                }
+                Out-Line '       note: the device now shows CPU/RAM 0 on its screen - that is this probe,'
+                Out-Line '       not the metrics of this PC. The agent overwrites it within a minute.'
+            } catch { Result 'counter grew after the probe' 'WARN' 'cannot read /api/state again' }
+        } else {
+            Out-Line '       (no probe sent: the check only reads. Add -Probe to test POST /ingest.)'
+        }
     } else {
         Result 'device /api/state parsed' 'FAIL' 'answer is not JSON'
     }
