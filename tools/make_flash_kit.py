@@ -50,8 +50,10 @@ FLASH_BAT = """@echo off
 rem inkmetrics (ESP-IDF build): firmware + host disk image.
 rem Usage: flash.bat COM5
 rem Put the board into bootloader first: hold BOOT, plug USB, keep 2 s, release.
-rem The disk image contains SETUP.CMD - the device brings the PC
-rem setup scripts with it (see pc-setup folder for copies).
+rem The disk image is written in the same run: it is what the device shows the PC
+rem as a 3.69 MB removable drive with instagent.cmd and the instructions.
+rem Command names use UNDERSCORES on purpose: esptool 4.x accepts only that form,
+rem 5.x accepts both, so this spelling works with any version (write-flash fails on 4.x).
 rem ASCII only on purpose: cmd.exe renders Russian text from a UTF-8 .bat as garbage.
 setlocal
 if "%~1"=="" (
@@ -75,7 +77,7 @@ if errorlevel 1 (
 )
 
 echo Flashing inkmetrics to %~1 ...
-%PY% -m esptool --chip esp32s3 --port %~1 --baud 921600 write-flash -z ^
+%PY% -m esptool --chip esp32s3 --port %~1 --baud 921600 write_flash -z ^
   0x0      "%~dp0bootloader.bin" ^
   0x8000   "%~dp0partition-table.bin" ^
   0xe000   "%~dp0ota_data_initial.bin" ^
@@ -90,12 +92,13 @@ if errorlevel 1 (
 
 rem Clear the sticky RTC bit (a previous /api/boot or self-check fallback sets it) and reset
 rem into the application, so USB does not have to be replugged.
-%PY% -m esptool --chip esp32s3 --port %~1 --before no-reset --after no-reset ^
-  write-mem 0x6000812C 0x00
+%PY% -m esptool --chip esp32s3 --port %~1 --before no_reset --after no_reset ^
+  write_mem 0x6000812C 0x00
 
 echo.
-echo DONE. The device should start: screen shows DEVICE page, the PC gets a new disk
-echo and a network adapter. On that disk: instagent.cmd installs the agent,
+echo DONE. The device should start: the screen shows the summary page (ONLINE / OFFLINE /
+echo NO DATA), the PC gets a new disk and a network adapter. On that disk: instagent.cmd
+echo installs the agent, README-RU.txt explains the rest.
 pause
 """
 
@@ -106,6 +109,8 @@ WHAT_TO_DO = """inkmetrics — прошивка прибора на этом к�
 --------------------
 1. Python 3 (любой свежий) и в нём esptool:
        pip install esptool
+   Подходит любая версия esptool: команды в flash.bat записаны так, чтобы работали и на
+   4.x, и на 5.x. Драйвер USB у ESP32-S3 системный, ставить ничего не нужно.
 2. Больше ничего: ни ESP-IDF, ни arduino-cli, ни исходников. Всё нужное — в папке idf.
 
 Порядок
@@ -114,8 +119,12 @@ WHAT_TO_DO = """inkmetrics — прошивка прибора на этом к�
    подержать ~2 секунды, отпустить. Порт определится сам (обычно COM5 и выше).
 2. Запустить:      idf\\flash.bat COM5          (подставьте свой порт)
    Список портов:  python -m serial.tools.list_ports -v
-3. После прошивки прибор запустится сам: на экране появится страница DEVICE,
-   компьютер увидит новый диск и сетевую карту.
+   Одним запуском пишутся и прошивка, и диск прибора: файл setup-disk-big.img лежит рядом
+   и уходит в свой раздел тем же flash.bat.
+3. После прошивки прибор запустится сам: на экране появится сводный экран (рамка
+   ONLINE / OFFLINE / NO DATA), компьютер увидит новый диск и сетевую карту.
+   Если хочется проверить файлы до прошивки:  certutil -hashfile inkmetrics_idf.bin SHA256
+   и сверить с SHA256SUMS.txt в этой же папке.
 
 Что происходит дальше (важно)
 -----------------------------
@@ -132,7 +141,7 @@ WHAT_TO_DO = """inkmetrics — прошивка прибора на этом к�
 
 После установки агента
 ---------------------
-Адрес прибора фиксированный: 192.168.7.1 (он же на его экране, строка ADDR).
+Адрес прибора фиксированный: 192.168.7.1 (он же на экране прибора, экран SETUP, строка WEB).
 Страница состояния:  http://192.168.7.1/
 Настройки прибора:   http://<адрес>/setup   (поворот экрана, блокировка записи на диск,
                                               цель пинга в интернете)
@@ -154,11 +163,11 @@ WHAT_TO_DO = """inkmetrics — прошивка прибора на этом к�
 через переднюю панель), другой кабель. Если частота мигания порта загрузчика (BOOT зажат)
 тоже раз в секунду — дело не в прошивке.
 
-Если интернета у прибора нет
-----------------------------
+Если метрик нет или прибор ведёт себя странно
+---------------------------------------------
 Запустите pc-setup\\CHECK.CMD: он проверит прибор, диск, агента, задачу, адрес и метрики.
-Подробная инструкция по сети на ПК (раздача или мост, что делать при сбоях) лежит рядом:
-pc-setup\\GUIDE-RU.txt.
+Подробная инструкция по сети на ПК (адрес на линии прибора, что делать при сбоях) лежит
+рядом: pc-setup\\GUIDE-RU.txt, а разбор агента — pc-setup\\README-RU.txt.
 
 Если метрик нет (агент не заработал)
 ------------------------------------
