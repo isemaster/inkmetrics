@@ -51,6 +51,11 @@ FONTS = {
     "font_mid":   ("C:/Windows/Fonts/consolab.ttf", 18, 30, 28, "mid"),
     "font_big":   ("C:/Windows/Fonts/consolab.ttf", 12, 22, 20, "big"),
     "font_huge":  ("C:/Windows/Fonts/consolab.ttf", 36, 44, 58, "huge"),
+    # строка состояния: слово в 1.5 раза крупнее big (чернила 21 против 14),
+    # расшифровка — в 1.5 раза крупнее small (чернила 9 против 6); без рамки
+    # вокруг пинга места хватает: PING 72 px + « - 15MS - 4/4» 117 px = 189 из 200
+    "font_ping":  ("C:/Windows/Fonts/consolab.ttf", 18, 32, 31, "big"),
+    "font_txt9":  ("C:/Windows/Fonts/consolab.ttf",  9, 16, 13, "big"),
 }
 
 # строка, по которой измеряем чернила шрифта (есть и цифры, и буквы, и °)
@@ -181,7 +186,9 @@ def main() -> int:
         sample = {"font_small": "192.168.7.1 · В СЕТИ · t°C",
                   "font_mid": "37%",
                   "font_big": "НЕТ СВЯЗИ",
-                  "font_huge": "78°"}[name]
+                  "font_huge": "78°",
+             "font_ping": "PING - 15MS - 4/4",
+             "font_txt9": " - 999MS - 4/4"}[name]
         print(f"\n--- превью {name}: «{sample}» ---")
         print(preview(glyphs, w, h, sample))
     return 0

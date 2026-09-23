@@ -23,7 +23,8 @@
 #include "settings.h"      /* slot_kind_t — что показывать в двух крупных числах */
 
 #define MARGIN     1     /* крайние поля */
-#define FRAME_PAD  3     /* сколько пустого вокруг надписи в рамке */
+#define FRAME_PAD  3     /* сколько пустого вокруг надписи в рамке (экран SETUP) */
+#define STATUS_PAD 2     /* то же для строки состояния сводного экрана: рамки нет */
 #define GAP_MIN    3     /* меньше этого промежутки не делаем: блоки слипнутся */
 
 /* ------------------------------------------------------------------ утилиты */
@@ -88,11 +89,19 @@ static void frame_title(const char *text, int y, int h)
     display_text_center(DISP_F_BIG, y + FRAME_PAD, buf);
 }
 
-/* Надпись в рамке: крупное слово состояния и мелкая расшифровка за ним. Крупной клеткой
-   «ONLINE - 15MS - 4/4» (19 знаков × 12 px = 228 px) в 200 px не влезает, поэтому состояние
-   идёт крупным шрифтом, а задержка и счёт ответов — мелким (6 px): вместе 150 px, и запас
-   остаётся даже для четырёхзначной задержки. */
-static void frame_status(const char *word, const char *detail, int y, int h)
+/* Строка состояния хоста — верхний блок сводного экрана. Рамки вокруг неё нет
+   (просьба пользователя 23.09: рамка вокруг пинга не нужна, а освободившееся место ушло
+   в шрифт). Слово — кеглем ping, он в 1.5 раза крупнее прежнего big (чернила 21 против 14),
+   задержка и счёт — кеглем txt9, в 1.5 раза крупнее small (9 против 6):
+   «PING» 72 px + « - 15MS - 4/4» 117 px = 189 px из 200. Четырёхзначная задержка в 9 px
+   уже не влезает (72 + 15 × 9 = 207), поэтому расшифровка переходит на мелкий шрифт:
+   строка никогда не обрезается, меняется только её кегль. */
+static int status_height(void)
+{
+    return display_text_h(DISP_F_PING) + 2 * STATUS_PAD;
+}
+
+static void status_line(const char *word, const char *detail, int y)
 {
     char w[16], d[24];
     snprintf(w, sizeof(w), "%s", word);
@@ -100,19 +109,22 @@ static void frame_status(const char *word, const char *detail, int y, int h)
     upper_utf8(w);
     upper_utf8(d);
 
-    display_rect(0, y, DISP_W, h, false, true);
-
-    const int ww = display_text_w(DISP_F_BIG, w);
-    const int wd = display_text_w(DISP_F_SMALL, d);
-    int x = (DISP_W - (ww + wd)) / 2;
+    const int h_word = display_text_h(DISP_F_PING);
+    const int w_word = display_text_w(DISP_F_PING, w);
+    int font = DISP_F_TXT9;
+    int w_det = display_text_w(font, d);
+    if (w_word + w_det > DISP_W) {
+        font = DISP_F_SMALL;
+        w_det = display_text_w(font, d);
+    }
+    int x = (DISP_W - (w_word + w_det)) / 2;
     if (x < 0) {
         x = 0;
     }
-    display_text_f(DISP_F_BIG, x, y + FRAME_PAD, w);
+    display_text_f(DISP_F_PING, x, y + STATUS_PAD, w);
     if (d[0]) {
-        display_text_f(DISP_F_SMALL, x + ww,
-                       y + FRAME_PAD + (display_text_h(DISP_F_BIG) - display_text_h(DISP_F_SMALL)) / 2,
-                       d);
+        display_text_f(font, x + w_word,
+                       y + STATUS_PAD + (h_word - display_text_h(font)) / 2, d);
     }
 }
 
@@ -269,19 +281,21 @@ static void draw_slot(int x0, int x1, int y, int h_huge, int h_mid,
 
 static void show_summary(const screen_state_t *st)
 {
-    const int h_frame = frame_height();
+    const int h_stat  = status_height();
     const int h_small = display_text_h(DISP_F_SMALL);
     const int h_mid   = display_text_h(DISP_F_MID);
     const int h_big   = display_text_h(DISP_F_BIG);
     const int h_huge  = display_text_h(DISP_F_HUGE);
 
-    const int heights[] = { h_frame, h_small, h_huge, 1, h_small, h_mid, h_big, h_small };
+    /* строки: состояние, пустая строка-отступ, подписи крупных чисел, сами числа,
+       разделитель, подписи процентов, проценты, аптайм, датчик */
+    const int heights[] = { h_stat, h_small, h_small, h_huge, 1, h_small, h_mid, h_big, h_small };
     const int n = (int)(sizeof(heights) / sizeof(heights[0]));
     const int gap = gap_for(sum_heights(heights, n), n);
 
     int y = 0;
 
-    /* 1. рамка — состояние ХОСТА по интернету: это главное, что панель сообщает.
+    /* 1. строка состояния — про интернет ХОСТА: это главное, что панель сообщает.
        Онлайн = у хоста есть интернет, офлайн = интернета нет; агент молчит — NO DATA
        (про интернет хоста прибор ничего не знает и делать вид, что знает, не должен). */
     char word[16], detail[24];
@@ -309,8 +323,12 @@ static void show_summary(const screen_state_t *st)
     } else {
         snprintf(word, sizeof(word), "NO DATA");
     }
-    frame_status(word, detail, y, h_frame);
-    y += h_frame + gap;
+    status_line(word, detail, y);
+    y += h_stat + gap;
+
+    /* мелкие подписи CPU/GPU — на строку ниже состояния (просьба пользователя 23.09):
+       слово стало крупнее, и вплотную к нему подписи читались как его хвост */
+    y += h_small + gap;
 
     /* 2. подписи крупных чисел и 3. сами числа — самое крупное на экране.
        Что показывать, выбрано на /setup (slot1, slot2); по умолчанию CPU % и вторая

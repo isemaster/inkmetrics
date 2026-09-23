@@ -130,6 +130,10 @@ static const font_ref_t FONT_LIST[DISP_FONTS] = {
       FONT_BIG_H,   FONT_BIG_BYTES,   FONT_BIG_INK_TOP,   FONT_BIG_INK_H },
     { font_huge_cp,  (const uint8_t *)font_huge_bits,  FONT_HUGE_COUNT,  FONT_HUGE_W,
       FONT_HUGE_H,  FONT_HUGE_BYTES,  FONT_HUGE_INK_TOP,  FONT_HUGE_INK_H },
+    { font_ping_cp,  (const uint8_t *)font_ping_bits,  FONT_PING_COUNT,  FONT_PING_W,
+      FONT_PING_H,  FONT_PING_BYTES,  FONT_PING_INK_TOP,  FONT_PING_INK_H },
+    { font_txt9_cp,  (const uint8_t *)font_txt9_bits,  FONT_TXT9_COUNT,  FONT_TXT9_W,
+      FONT_TXT9_H,  FONT_TXT9_BYTES,  FONT_TXT9_INK_TOP,  FONT_TXT9_INK_H },
 };
 
 static const font_ref_t *font_ref(int font)

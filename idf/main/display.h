@@ -45,10 +45,12 @@ void display_hline(int x, int y, int len, bool black);
 void display_rect(int x, int y, int w, int h, bool filled, bool black);
 
 /* Шрифты. Индексы — те же, что в fonts.h (генерирует tools/make_font.py):
-     0 small 6x11  — подписи, адреса, нижние строки;
-     1 mid   18x30 — проценты CPU/RAM/DISK;
-     2 big   12x22 — заголовок ONLINE/SETUP, аптайм, значения строк SETUP;
-     3 huge  40x48 — температуры GPU, самое крупное на экране.
+     0 small  6x11  — подписи, адреса, нижние строки (чернила 6);
+     1 mid    18x30 — проценты CPU/RAM/DISK (чернила 19);
+     2 big    12x22 — заголовок SETUP, аптайм, значения строк SETUP (чернила 14);
+     3 huge   36x44 — крупные числа сводного экрана (чернила 41);
+     4 ping   18x32 — слово состояния хоста: в 1.5 раза крупнее big (чернила 21);
+     5 txt9    9x16 — задержка и счёт пингов: в 1.5 раза крупнее small (чернила 9).
    y задаёт верх ЧЕРНИЛ, а не верха клетки шрифта: внутри клетки есть пустые строки,
    их высоту знает генератор шрифтов (FONT_*_INK_TOP), и без этой поправки раскладка
    «плывёт» на 2—3 px. */
@@ -56,7 +58,9 @@ void display_rect(int x, int y, int w, int h, bool filled, bool black);
 #define DISP_F_MID   1
 #define DISP_F_BIG   2
 #define DISP_F_HUGE  3
-#define DISP_FONTS   4
+#define DISP_F_PING  4    /* 18x32: слово состояния в строке пинга */
+#define DISP_F_TXT9  5    /* 9x16:  задержка и счёт пингов */
+#define DISP_FONTS   6
 
 void display_text_f(int font, int x, int y, const char *utf8);
 void display_text_center(int font, int y, const char *utf8);          /* по центру экрана */
