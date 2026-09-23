@@ -66,7 +66,7 @@
 #define PING_TARGET_NAME "ya.ru"     /* цель пинга по умолчанию (значение хранится в настройках) */
 #define PING_TARGET_IP   "77.88.55.242"   /* запасной адрес, если DNS не отвечает */
 #define BOOT_GPIO     0
-#define FW_VERSION    "0.6.0-idf"
+#define FW_VERSION    "0.6.1-idf"
 
 static const char *TAG = "eink";
 static esp_netif_t *s_netif = NULL;
@@ -422,13 +422,17 @@ static esp_err_t setup_get(httpd_req_t *req)
         "<option value=\"270\"%s>270°</option></select>"
         "<label>Крупное число слева</label><select name=\"slot1\">%s</select>"
         "<label>Крупное число справа</label><select name=\"slot2\">%s</select>"
-        "<label>Цель пинга в интернете</label>"
+        "<label>Узел для проверки интернета (слово PING в рамке сводного экрана)</label>"
         "<input type=\"text\" name=\"ping\" maxlength=\"31\" value=\"%s\">"
         "<label><input type=\"checkbox\" name=\"wlock\"%s> Диск прибора только для чтения</label>"
         "<button type=\"submit\">Сохранить</button></form>"
         "<p class=\"hint\">Диск: %u КБ, сейчас %s. Прошивка %s.</p>"
         "<p class=\"hint\">Крупные числа — то, что видно на сводном экране издалека."
         " «GPU: вторая, иначе первая» значит: вторая карта, а если она одна — первая.</p>"
+        "<p class=\"hint\">Этот узел агент на компьютере пингует четыре раза в минуту и по нему"
+        " решает, есть ли у хоста интернет: рамка покажет PING - &lt;мс&gt; - &lt;сколько пингов"
+        " ответило&gt;, а если ни один не вернулся — OFFLINE. Можно имя или адрес; если пинг не"
+        " отвечает, но узел открыт на порту 443, в рамке будет TCP.</p>"
         "<p class=\"hint\">Кнопками прибора тоже можно: на экране SETUP короткое BOOT — поворот,"
         " удержание BOOT — блокировка диска. PWR листает страницы.</p>"
         "<p><a href=\"/\">Состояние</a></p></body></html>",
@@ -627,7 +631,8 @@ static esp_err_t state_get(httpd_req_t *req)
         "\"cpu\":%.0f,\"mem\":%.0f,\"disk\":%.0f,\"gpu_count\":%d,"
         "\"gpu0\":%.0f,\"gpu0_temp\":%d,\"gpu0_mem\":%.0f,"
         "\"gpu1\":%.0f,\"gpu1_temp\":%d,\"gpu1_mem\":%.0f,"
-        "\"cpu_temp\":%d,\"ping_known\":%u,\"ping_ok\":%u,\"ping_ms\":%u,\"ping_target\":\"%s\","
+        "\"cpu_temp\":%d,\"ping_known\":%u,\"ping_ok\":%u,\"ping_ms\":%u,\"ping_got\":%d,"
+        "\"ping_target\":\"%s\","
         "\"up_h\":%.1f,\"tcp\":%d,\"smart\":\"%s\"}}",
         fw_version_str(), esp_timer_get_time() / 1000000,
         (unsigned)esp_get_free_heap_size(), s_link_up ? 1u : 0u, (unsigned)s_reconnects,
@@ -649,7 +654,8 @@ static esp_err_t state_get(httpd_req_t *req)
         (double)im.gpu_pct[0], im.gpu_temp_c[0], (double)im.gpu_mem_pct[0],
         (double)im.gpu_pct[1], im.gpu_temp_c[1], (double)im.gpu_mem_pct[1],
         im.cpu_temp_c, (unsigned)(im.ping_known ? 1 : 0), (unsigned)im.ping_ok,
-        (unsigned)im.ping_ms, im.ping_target, (double)im.up_h,
+        (unsigned)im.ping_ms, im.ping_got_known ? (int)im.ping_got : -1, im.ping_target,
+        (double)im.up_h,
         (int)im.tcp_est, im.smart);
     httpd_resp_set_type(req, "application/json");
     return httpd_resp_send(req, json, n);

@@ -65,6 +65,7 @@ int main(void)
     st.host_net_known = true;
     st.host_online = true;
     st.host_ping_ms = 15;
+    st.host_ping_got = 4;           /* ответили все четыре пинга */
     st.host_ping_target = "8.8.8.8";
     host_set_output("summary.pgm");
     screen_show(&st, 0);
@@ -95,6 +96,7 @@ int main(void)
     screen_state_t off = st;
     off.host_online = false;
     off.host_ping_ms = 0;
+    off.host_ping_got = 0;
     host_set_output("offline.pgm");
     screen_show(&off, 0);
 
@@ -106,6 +108,7 @@ int main(void)
     none.agent_age_s = 340;
     none.host_net_known = true;
     none.host_online = false;
+    none.host_ping_got = 0xFF;      /* агент молчит — счёт неизвестен */
     none.cpu_pct = none.mem_pct = none.disk_pct = -1.0f;
     none.gpu_count = 0;
     none.gpu_temp_c[0] = none.gpu_temp_c[1] = -1;

@@ -187,6 +187,10 @@ void ingest_apply(const char *json)
     if (json_num(json, "ping_ms", &d)) {
         st.ping_ms = (uint32_t)(d < 0 ? 0 : d);
     }
+    if (json_num(json, "ping_got", &d)) {
+        st.ping_got = (uint32_t)(d < 0 ? 0 : d);
+        st.ping_got_known = true;
+    }
     if (json_num(json, "uptime_hours", &d)) {
         st.up_h = (float)d;
     }

@@ -115,8 +115,17 @@ ESP-IDF, ни драйверов. Запускать можно из любой 
 
 Что показывает прибор
 ---------------------
-Рамка: ONLINE - у этого компьютера есть интернет; OFFLINE - интернета нет, числа при этом
-живые; NO DATA - метрики не приходят дольше 90 секунд, вместо чисел прочерки.
+Рамка: "PING - <мс> - <сколько из четырёх пингов ответило>", когда у компьютера есть
+интернет (например "PING - 15MS - 4/4"); "OFFLINE - 0/4", когда на пинг не ответили;
+NO DATA - метрики не приходят дольше 90 секунд, вместо чисел прочерки.
+
+Узел, по которому проверяется интернет, задаётся в настройках прибора (страница
+http://192.168.7.1/setup, поле "Узел для проверки интернета"): агент читает его с прибора
+раз в минуту, поэтому одна настройка действует на всех компьютерах сразу и править файлы
+на каждом ПК не нужно. Агент делает четыре пинга и показывает среднее по ответившим; если
+ни один пинг не вернулся, он дополнительно проверяет соединение на порт 443 того же узла
+(провайдеры часто игнорируют пинг, а порт открыт) и пишет в рамке TCP вместо счёта. Если
+узел в настройках пуст или прибор недоступен, берётся запасной 8.8.8.8.
 
 Под рамкой два крупных числа. Что в них показывать - выбирается на странице настроек
 прибора: откройте в браузере этого компьютера http://192.168.7.1/setup и выберите в
@@ -130,15 +139,18 @@ GPU0 %, GPU1 %, "GPU: вторая, иначе первая", GPU0 °C, GPU1 °C
 на месте числа будет прочерк, а не ноль.
 
 Короткое нажатие PWR переключает сводный экран и SETUP. На SETUP видно адрес прибора,
-строку SHOW (что стоит в крупных числах) и версию прошивки. Прошивка 0.6.0 и новее.
+строку SHOW (что стоит в крупных числах), строку PING NODE (узел проверки интернета) и
+версию прошивки. Прошивка 0.6.1 и новее.
 
 Что агент делает
 ----------------
 Раз в 60 секунд агент собирает метрики этого компьютера и отправляет их прибору
 запросом POST на http://192.168.7.1/ingest: загрузку CPU, память, диск, температуры и
 загрузку видеокарт (по всем картам), аптайм. Отдельно агент проверяет интернет этого
-компьютера (пинг цели, по умолчанию 8.8.8.8, при молчании ICMP - проверка TCP 443):
-именно по этому ответу прибор пишет в рамке ONLINE или OFFLINE.
+компьютера: узел берётся из настроек прибора, делается четыре пинга, при молчании ICMP -
+проверка TCP 443:
+именно по этому ответу прибор пишет в рамке "PING - <мс> - <ответы>" или "OFFLINE".
+В журнале агента то же самое: "sent ok (cpu=..%, ping YA.RU 15ms 4/4)".
 
 Если метрики не приходят дольше 90 секунд, прибор пишет NO DATA и показывает прочерки
 вместо чисел - старые данные за текущие он не выдаёт.
@@ -290,8 +302,17 @@ Installation (5 steps)
 
 What the device shows
 ---------------------
-The frame: ONLINE - this PC has internet; OFFLINE - it has none while the numbers stay
-live; NO DATA - no metrics for 90 seconds, the numbers turn into dashes.
+The frame: "PING - <ms> - <answers out of four>" when this PC has internet (for instance
+"PING - 15MS - 4/4"); "OFFLINE - 0/4" when the pings went unanswered; NO DATA - no metrics
+for 90 seconds, the numbers turn into dashes.
+
+The node used for the internet check is chosen in the device settings (page
+http://192.168.7.1/setup, the field "the node for the internet check"): the agent reads it
+from the device once a minute, so a single setting serves every PC and no files have to be
+edited on each machine. The agent sends four pings and shows the average of the answers; if
+none of them came back it also checks a TCP connect to port 443 of the same node (providers
+often ignore pings while the port stays open) and prints TCP in the frame instead of the
+count. With the field empty or the device unreachable the fallback is 8.8.8.8.
 
 Below the frame sit two large numbers. What they show is chosen on the device setup page:
 open http://192.168.7.1/setup in a browser on this PC and pick from the lists "Крупное
@@ -306,16 +327,17 @@ humidity. When a value has no source (for instance a GPU temperature without the
 driver) the device shows a dash, not a zero.
 
 A short PWR press switches between the summary screen and SETUP. SETUP shows the device
-address, the SHOW line (what is in the large numbers) and the firmware version. Firmware
-0.6.0 or newer.
+address, the SHOW line (what is in the large numbers), the PING NODE line (the node used for
+the internet check) and the firmware version. Firmware 0.6.1 or newer.
 
 What the agent does
 -------------------
 Every 60 seconds the agent collects this PC's metrics and sends them to the device with
 POST http://192.168.7.1/ingest: CPU load, memory, disk, temperature and load of every
-NVIDIA card, uptime. Separately the agent checks this PC's internet access (ping to the
-target, 8.8.8.8 by default, with a TCP 443 fallback when ICMP stays silent) - that answer
-is what the device prints as ONLINE or OFFLINE in the frame.
+NVIDIA card, uptime. Separately the agent checks this PC's internet access: the node comes
+from the device settings, four pings are sent and a TCP 443 check is made when ICMP stays
+silent. That answer is what the device prints in the frame as "PING - <ms> - <answers>" or
+"OFFLINE". The agent log shows the same: "sent ok (cpu=..%, ping YA.RU 15ms 4/4)".
 
 When no metrics arrive for 90 seconds the device shows NO DATA and replaces the numbers
 with dashes: it will not pass old readings off as current ones.

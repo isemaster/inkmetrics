@@ -7,8 +7,8 @@
  *   * подписи одним кеглем (6x11) — CPU/RAM/DISK и GPU0/GPU1 не спорят между собой;
  *   * крупным остаётся только то, ради чего прибор стоит на столе: температуры карт
  *     (36x44) и проценты (18x30);
- *   * рамка сводного экрана — состояние ХОСТА по интернету: ONLINE (интернет есть),
- *     OFFLINE (интернета нет), NO DATA (агент молчит — состояние неизвестно);
+ *   * рамка сводного экрана — состояние ХОСТА по интернету: ONLINE-<мс> (интернет есть,
+ *     задержка от агента), OFFLINE- (на пинг не ответили), NO DATA (агент молчит);
  *   * «н/д» показываем прочерком, а не нулём: ноль и «неизвестно» — разные вещи;
  *   * экранов два: сводный и SETUP, переключение коротким нажатием PWR.
  *
@@ -86,6 +86,34 @@ static void frame_title(const char *text, int y, int h)
     upper_utf8(buf);
     display_rect(0, y, DISP_W, h, false, true);
     display_text_center(DISP_F_BIG, y + FRAME_PAD, buf);
+}
+
+/* Надпись в рамке: крупное слово состояния и мелкая расшифровка за ним. Крупной клеткой
+   «ONLINE - 15MS - 4/4» (19 знаков × 12 px = 228 px) в 200 px не влезает, поэтому состояние
+   идёт крупным шрифтом, а задержка и счёт ответов — мелким (6 px): вместе 150 px, и запас
+   остаётся даже для четырёхзначной задержки. */
+static void frame_status(const char *word, const char *detail, int y, int h)
+{
+    char w[16], d[24];
+    snprintf(w, sizeof(w), "%s", word);
+    snprintf(d, sizeof(d), "%s", detail);
+    upper_utf8(w);
+    upper_utf8(d);
+
+    display_rect(0, y, DISP_W, h, false, true);
+
+    const int ww = display_text_w(DISP_F_BIG, w);
+    const int wd = display_text_w(DISP_F_SMALL, d);
+    int x = (DISP_W - (ww + wd)) / 2;
+    if (x < 0) {
+        x = 0;
+    }
+    display_text_f(DISP_F_BIG, x, y + FRAME_PAD, w);
+    if (d[0]) {
+        display_text_f(DISP_F_SMALL, x + ww,
+                       y + FRAME_PAD + (display_text_h(DISP_F_BIG) - display_text_h(DISP_F_SMALL)) / 2,
+                       d);
+    }
 }
 
 static int frame_height(void)
@@ -256,11 +284,32 @@ static void show_summary(const screen_state_t *st)
     /* 1. рамка — состояние ХОСТА по интернету: это главное, что панель сообщает.
        Онлайн = у хоста есть интернет, офлайн = интернета нет; агент молчит — NO DATA
        (про интернет хоста прибор ничего не знает и делать вид, что знает, не должен). */
-    const char *status = "NO DATA";
+    char word[16], detail[24];
+    detail[0] = '\0';
     if (st->agent_ok) {
-        status = st->host_online ? "ONLINE" : "OFFLINE";
+        if (st->host_online) {
+            /* Задержку присылает агент: четыре пинга выбранного на /setup узла, показываем
+               среднее по ответившим. Больше 9999 мс не показываем — места в рамке нет. */
+            unsigned ms = st->host_ping_ms > 9999u ? 9999u : (unsigned)st->host_ping_ms;
+            snprintf(word, sizeof(word), "PING");
+            if (st->host_ping_got == 0xFF) {
+                snprintf(detail, sizeof(detail), " - %ums", ms);
+            } else if (st->host_ping_got == 0) {
+                /* пинг не ответил, но узел отозвался на 443 — так и пишем, а не «0/4» */
+                snprintf(detail, sizeof(detail), " - %ums - TCP", ms);
+            } else {
+                snprintf(detail, sizeof(detail), " - %ums - %u/4", ms, (unsigned)st->host_ping_got);
+            }
+        } else {
+            snprintf(word, sizeof(word), "OFFLINE");
+            if (st->host_ping_got != 0xFF) {
+                snprintf(detail, sizeof(detail), " - %u/4", (unsigned)st->host_ping_got);
+            }
+        }
+    } else {
+        snprintf(word, sizeof(word), "NO DATA");
     }
-    frame_title(status, y, h_frame);
+    frame_status(word, detail, y, h_frame);
     y += h_frame + gap;
 
     /* 2. подписи крупных чисел и 3. сами числа — самое крупное на экране.
@@ -406,7 +455,7 @@ static void show_setup(const screen_state_t *st)
     setup_row("DISK WRITE", st->disk_write_lock ? "OFF" : "ON", y, h_big, h_small);
     y += h_big + gap;
 
-    setup_row("PING", st->ping_target && st->ping_target[0] ? st->ping_target : "-",
+    setup_row("PING NODE", st->ping_target && st->ping_target[0] ? st->ping_target : "-",
               y, h_big, h_small);
     y += h_big + gap;
 

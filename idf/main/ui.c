@@ -154,6 +154,7 @@ static void ui_task(void *arg)
         st.host_net_known = im.ping_known;
         st.host_online = fresh && im.ping_known && im.ping_ok;
         st.host_ping_ms = im.ping_ms;
+        st.host_ping_got = im.ping_got_known ? (uint8_t)(im.ping_got > 4 ? 4 : im.ping_got) : 0xFF;
         st.host_ping_target = im.ping_target;
 
         if (fresh) {

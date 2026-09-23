@@ -116,10 +116,11 @@ pause
 exit /b 0
 rem =====PAYLOAD:agent.ps1=====# agent.ps1 - host monitoring agent: collects host metrics and sends them to the device
 #
-# Settings (edit here; the device itself needs no setup):
+# Settings (edit here; the internet check node is chosen on the device web page):
 $DeviceIP   = "192.168.7.1"      # device IP (the ADDR line on its screen)
 $Interval   = 60                 # seconds between sends
-$PingTarget = "8.8.8.8"          # internet check target: ICMP, then TCP 443 (ONLINE/OFFLINE)
+$PingTarget = "8.8.8.8"          # fallback node: the device keeps its own in /api/state
+                                 # (p_target, field "the node for the internet check") and wins
 $HostName   = $env:COMPUTERNAME  # host name shown on the device
 $Port       = 80                 # ingest port on the device
 $LogPath    = "C:\ProgramData\inkmetrics\agent.log"
@@ -240,36 +241,56 @@ function Get-DiskPercent {
     return $null
 }
 
-function Get-Ping {
-    # Internet check for the ONLINE/OFFLINE frame on the device.
-    # ICMP first (Test-Connection): it also gives the latency. If ICMP does not answer, the
-    # internet may still be there (providers and firewalls drop echo requests), so the answer
-    # is double-checked with a TCP connect to the same host on 443. Reporting "no internet"
-    # for a working line is worse than a slower check.
+function Get-DevicePingTarget {
+    # Which node to ping is chosen on the device web page (/setup, "the node for the internet
+    # check"). The device keeps it in NVS and reports it in /api/state as p_target, so one
+    # setting serves every PC. Read once per cycle; device silent or field empty - fall back
+    # to $PingTarget.
     try {
-        $r = Test-Connection -ComputerName $PingTarget -Count 1 -Quiet
-        if ($r) {
-            # latency: time one more echo request
-            $t0 = [DateTime]::Now
-            $null = Test-Connection -ComputerName $PingTarget -Count 1 -Quiet
-            $ms = [math]::Round(([DateTime]::Now - $t0).TotalMilliseconds)
-            return @{ ok = $true; ms = [int]$ms }
+        $r = Invoke-WebRequest -Uri ("http://{0}:{1}/api/state" -f ${DeviceIP}, ${Port}) `
+             -TimeoutSec 4 -UseBasicParsing
+        $m = [regex]::Match($r.Content, '"p_target"\s*:\s*"([^"]*)"')
+        if ($m.Success) {
+            $t = $m.Groups[1].Value.Trim()
+            if ($t -and $t -ne "-") { return $t }
         }
     } catch { }
+    return $PingTarget
+}
+
+function Get-Ping {
+    param([string]$target)
+    # Internet check for the ONLINE/OFFLINE frame on the device: four ICMP echo requests to
+    # the node chosen on the device, the latency is the average of the answers we got. At
+    # least one answer means the internet is there. When ICMP stays silent the node may still
+    # be reachable (providers and firewalls drop echo requests), so the answer is
+    # double-checked with a TCP connect to the same node on 443: reporting "no internet" for
+    # a working line is worse than a slower check.
+    $rtt = @()
+    try {
+        $rtt = @(Test-Connection -ComputerName $target -Count 4 -ErrorAction SilentlyContinue |
+                 Where-Object { $_.StatusCode -eq 0 } |
+                 ForEach-Object { [int]$_.ResponseTime })
+    } catch { }
+
+    if ($rtt.Count -gt 0) {
+        $avg = ($rtt | Measure-Object -Average).Average
+        return @{ ok = $true; ms = [int][math]::Round($avg); got = $rtt.Count; loss = 4 - $rtt.Count }
+    }
 
     try {
         $t0 = [DateTime]::Now
         $c = New-Object System.Net.Sockets.TcpClient
-        $iar = $c.BeginConnect($PingTarget, 443, $null, $null)
+        $iar = $c.BeginConnect($target, 443, $null, $null)
         if ($iar.AsyncWaitHandle.WaitOne(3000, $false) -and $c.Connected) {
             $ms = [math]::Round(([DateTime]::Now - $t0).TotalMilliseconds)
             $c.Close()
-            return @{ ok = $true; ms = [int]$ms }
+            return @{ ok = $true; ms = [int]$ms; got = 0; loss = 4 }
         }
         $c.Close()
     } catch { }
 
-    return @{ ok = $false; ms = 0 }
+    return @{ ok = $false; ms = 0; got = 0; loss = 4 }
 }
 
 function Get-UptimeHours {
@@ -422,7 +443,9 @@ function Build-Json {
     $cpu  = Get-CpuPercent
     $mem  = Get-MemPercent
     $disk = Get-DiskPercent
-    $ping = Get-Ping
+    $target = Get-DevicePingTarget
+    $ping = Get-Ping $target
+    $script:PingInfo = "$target $($ping.ms)ms $($ping.got)/4"
     $up   = Get-UptimeHours
     $tcp  = Get-TcpEstablished
     $temp = Get-CpuTemp
@@ -446,7 +469,8 @@ function Build-Json {
         gpu1_mem_percent = if ($g1) { $g1.mem } else { $null }
         ping_ok       = $ping.ok
         ping_ms       = $ping.ms
-        ping_target   = $PingTarget
+        ping_got      = $ping.got
+        ping_target   = $target
         uptime_hours  = $up
         tcp_established = $tcp
         cpu_temp      = $temp
@@ -486,7 +510,7 @@ while ($true) {
     if ($ok) {
         $sendCount++
         $failCount = 0
-        Log ("sent ok (cpu=$($json | ConvertFrom-Json | Select-Object -Expand cpu_percent)%)")
+        Log ("sent ok (cpu=$($json | ConvertFrom-Json | Select-Object -Expand cpu_percent)%, ping $script:PingInfo)")
     } else {
         $failCount++
         if ($failCount -eq 1 -or $failCount % 10 -eq 0) {

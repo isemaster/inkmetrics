@@ -61,8 +61,17 @@ Installation (5 steps)
 
 What the device shows
 ---------------------
-The frame: ONLINE - this PC has internet; OFFLINE - it has none while the numbers stay
-live; NO DATA - no metrics for 90 seconds, the numbers turn into dashes.
+The frame: "PING - <ms> - <answers out of four>" when this PC has internet (for instance
+"PING - 15MS - 4/4"); "OFFLINE - 0/4" when the pings went unanswered; NO DATA - no metrics
+for 90 seconds, the numbers turn into dashes.
+
+The node used for the internet check is chosen in the device settings (page
+http://192.168.7.1/setup, the field "the node for the internet check"): the agent reads it
+from the device once a minute, so a single setting serves every PC and no files have to be
+edited on each machine. The agent sends four pings and shows the average of the answers; if
+none of them came back it also checks a TCP connect to port 443 of the same node (providers
+often ignore pings while the port stays open) and prints TCP in the frame instead of the
+count. With the field empty or the device unreachable the fallback is 8.8.8.8.
 
 Below the frame sit two large numbers. What they show is chosen on the device setup page:
 open http://192.168.7.1/setup in a browser on this PC and pick from the lists "Крупное
@@ -77,16 +86,17 @@ humidity. When a value has no source (for instance a GPU temperature without the
 driver) the device shows a dash, not a zero.
 
 A short PWR press switches between the summary screen and SETUP. SETUP shows the device
-address, the SHOW line (what is in the large numbers) and the firmware version. Firmware
-0.6.0 or newer.
+address, the SHOW line (what is in the large numbers), the PING NODE line (the node used for
+the internet check) and the firmware version. Firmware 0.6.1 or newer.
 
 What the agent does
 -------------------
 Every 60 seconds the agent collects this PC's metrics and sends them to the device with
 POST http://192.168.7.1/ingest: CPU load, memory, disk, temperature and load of every
-NVIDIA card, uptime. Separately the agent checks this PC's internet access (ping to the
-target, 8.8.8.8 by default, with a TCP 443 fallback when ICMP stays silent) - that answer
-is what the device prints as ONLINE or OFFLINE in the frame.
+NVIDIA card, uptime. Separately the agent checks this PC's internet access: the node comes
+from the device settings, four pings are sent and a TCP 443 check is made when ICMP stays
+silent. That answer is what the device prints in the frame as "PING - <ms> - <answers>" or
+"OFFLINE". The agent log shows the same: "sent ok (cpu=..%, ping YA.RU 15ms 4/4)".
 
 When no metrics arrive for 90 seconds the device shows NO DATA and replaces the numbers
 with dashes: it will not pass old readings off as current ones.

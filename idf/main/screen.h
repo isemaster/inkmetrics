@@ -46,6 +46,7 @@ typedef struct {
     bool        host_online;
     bool        host_net_known;     /* хост сообщил результат проверки интернета */
     uint32_t    host_ping_ms;       /* задержка пинга с хоста, мс */
+    uint8_t     host_ping_got;      /* сколько из 4 пингов ответило; 0xFF — агент не сообщил */
     const char *host_ping_target;   /* что хост пинговал (8.8.8.8, ya.ru) */
 
     /* --- метрики хоста --- */

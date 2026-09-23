@@ -63,6 +63,8 @@ typedef struct {
     bool     ping_known;                  /* хост вообще проверял интернет (поле пришло) */
     int      ping_ok;                     /* 1 — хост дотянулся до цели пинга (интернет есть) */
     uint32_t ping_ms;
+    uint32_t ping_got;                    /* сколько из четырёх пингов ответило (0..4) */
+    bool     ping_got_known;              /* поле пришло; старый агент его не шлёт */
     char     ping_target[INGEST_HOST_LEN];/* что хост пинговал: 8.8.8.8, ya.ru и т.п. */
     float    up_h;                        /* аптайм хоста, часы */
     int32_t  tcp_est;                     /* установленных TCP-соединений; INGEST_NA — нет данных */
