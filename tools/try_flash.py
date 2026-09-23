@@ -104,7 +104,7 @@ def reset_to_app(port: str) -> None:
     регистр через загрузчик и сбрасываем чип.
     """
     cmd = [sys.executable, "-m", "esptool", "--chip", "esp32s3", "--port", port,
-           "--before", "no-reset", "--after", "watchdog-reset",
+           "--before", "no_reset", "--after", "watchdog_reset",
            "write-mem", hex(RTC_CNTL_OPTION1_REG), "0x00", "0x1"]
     res = subprocess.run(cmd, capture_output=True, text=True)
     out = ((res.stdout or "") + (res.stderr or "")).strip()
@@ -113,7 +113,7 @@ def reset_to_app(port: str) -> None:
         return
     print("снять RTC-бит не вышло (" + out.splitlines()[-1] + "), просто сбрасываю чип", flush=True)
     subprocess.run([sys.executable, "-m", "esptool", "--chip", "esp32s3", "--port", port,
-                    "--before", "no-reset", "--after", "watchdog-reset", "chip-id"],
+                    "--before", "no_reset", "--after", "watchdog_reset", "chip-id"],
                    capture_output=True, text=True)
 
 
@@ -184,7 +184,7 @@ def main() -> int:
         # --after no-reset: чип остаётся в загрузчике, чтобы следующим шагом снять
         # RTC-бит (иначе он снова уйдёт в загрузчик и приложение не запустится)
         cmd = [sys.executable, "-m", "esptool", "--chip", "esp32s3", "--port", port,
-               "--before", "default-reset", "--after", "no-reset",
+               "--before", "default-reset", "--after", "no_reset",
                "--baud", "921600", "write-flash"] + flags + ["-z"]
         for addr, rel in images:
             # Образ диска задан абсолютным путём (MSC_DISK_IMAGE), остальные — относительно
