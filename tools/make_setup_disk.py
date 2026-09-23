@@ -51,13 +51,13 @@ WANTED = ["instagent.cmd", "deinstall.cmd", "README-RU.txt", "README-EN.txt"]
 
 
 def main() -> int:
-    files: list[tuple[str, bytes]] = []
+    files: list[tuple] = []
     for name in WANTED:
         path = os.path.join(KIT, name)
         if not os.path.exists(path):
             raise SystemExit(f"нет файла {path} — соберите папку: python tools/make_agent_kit.py")
         with open(path, "rb") as fh:
-            files.append((name, fh.read()))
+            files.append((name, fh.read(), os.path.getmtime(path)))
 
     img = mdi.build(SECTORS, files)
     print(f"диск: {len(img)} байт ({len(img) // 512} секторов = {len(img) / 1048576:.2f} МБ)")
@@ -65,7 +65,7 @@ def main() -> int:
     # проверка 1: побайтово сверяем то, что попало в образ, с файлами набора
     listed = dict(mdi.read_root_entries(img))
     ok = True
-    for name, content in files:
+    for name, content, _ts in files:
         size = listed.get(name)
         back = mdi.read_file(img, name)
         if back is None:

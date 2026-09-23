@@ -47,16 +47,38 @@ Installation (5 steps)
    ("Yes"). The rights are needed once: for the adapter address and the task.
 3. Wait for "set : 192.168.7.2/24, no gateway", "task inkmetrics agent : registered"
    and "Agent installed". The window stays open.
-4. Check the device: the frame must read ONLINE (this PC has internet), below it the GPU
-   temperature in large digits, then CPU / RAM / DISK percentages and uptime. A short PWR
-   press switches to the SETUP screen and back. The numbers must match this PC; NO DATA in
-   the frame means the agent is not sending (see step 5).
+4. Check the device: the frame must read ONLINE (this PC has internet), below it two large
+   numbers (by default CPU load and GPU load; what to show is chosen on the device setup
+   page, see "What the device shows"), then CPU / RAM / DISK percentages and uptime. A
+   short PWR press switches to the SETUP screen and back. The numbers must match this PC;
+   NO DATA in the frame means the agent is not sending (see step 5).
 5. Check on the PC (either):
 
        schtasks /query /tn "inkmetrics agent" /v /fo LIST
        type C:\ProgramData\inkmetrics\agent.log
 
    The journal must get "sent ok (cpu=..%)" lines once a minute.
+
+What the device shows
+---------------------
+The frame: ONLINE - this PC has internet; OFFLINE - it has none while the numbers stay
+live; NO DATA - no metrics for 90 seconds, the numbers turn into dashes.
+
+Below the frame sit two large numbers. What they show is chosen on the device setup page:
+open http://192.168.7.1/setup in a browser on this PC and pick from the lists "Крупное
+число слева" and "Крупное число справа" (the large number, left and right). The choices
+are CPU %, RAM %, DISK %, GPU0 %, GPU1 %, "GPU: second, else first", GPU0 °C, GPU1 °C and
+"empty" (show nothing). By default the left one is CPU load and the right one is GPU load:
+with two cards the second card is shown, with a single card the card itself. The choice is
+kept in the device and survives a reboot.
+
+Under them: CPU / RAM / DISK percentages, PC uptime, and the device's own temperature and
+humidity. When a value has no source (for instance a GPU temperature without the NVIDIA
+driver) the device shows a dash, not a zero.
+
+A short PWR press switches between the summary screen and SETUP. SETUP shows the device
+address, the SHOW line (what is in the large numbers) and the firmware version. Firmware
+0.6.0 or newer.
 
 What the agent does
 -------------------

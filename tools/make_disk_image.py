@@ -20,6 +20,8 @@ from __future__ import annotations
 
 import argparse
 import struct
+import time
+from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -133,7 +135,12 @@ def _lfn_entries(short11: bytes, name: str) -> list[bytes]:
     return out
 
 
-def build(total_sectors: int, files: list[tuple[str, bytes]]) -> bytes:
+def build(total_sectors: int, files: list[tuple]) -> bytes:
+    """files: (name, content) или (name, content, время правки исходника).
+
+    Время нужно для дат в записях каталога: без них Windows показывает файл с пустой
+    датой (01.01.1601), и по диску не понять, свежий на нём набор или старый.
+    """
     part_start = 1
     part_sectors = total_sectors - part_start
 
@@ -153,7 +160,7 @@ def build(total_sectors: int, files: list[tuple[str, bytes]]) -> bytes:
         raise SystemExit(f"{total_sectors} sectors is too small for FAT16 "
                          f"({max_clusters} clusters, need 4085+)")
 
-    used = sum((len(c) + SECTOR - 1) // SECTOR or 1 for _, c in files)
+    used = sum((len(f[1]) + SECTOR - 1) // SECTOR or 1 for f in files)
     if used > max_clusters:
         raise SystemExit(f"files need {used} clusters, volume has {max_clusters}")
 
@@ -191,7 +198,9 @@ def build(total_sectors: int, files: list[tuple[str, bytes]]) -> bytes:
     next_cluster = 2
     entry_off = 0
     taken: set[str] = set()
-    for name, content in files:
+    for item in files:
+        name, content = item[0], item[1]
+        mtime = item[2] if len(item) > 2 else None
         short = _short_name(name, taken)
         taken.add(short)
         base, _, ext = short.partition(".")
@@ -212,6 +221,15 @@ def build(total_sectors: int, files: list[tuple[str, bytes]]) -> bytes:
         root[off + 11] = 0x20
         struct.pack_into("<H", root, off + 26, next_cluster)
         struct.pack_into("<I", root, off + 28, len(content))
+        # Даты создания и последней записи (формат FAT: год от 1980, секунды через 2).
+        # Ноль здесь Windows показывает как «01.01.1601» — файл выглядит отставшим.
+        dt = datetime.fromtimestamp(mtime if mtime else time.time())
+        fdate = ((max(dt.year, 1980) - 1980) << 9) | (dt.month << 5) | dt.day
+        ftime = (dt.hour << 11) | (dt.minute << 5) | (dt.second // 2)
+        struct.pack_into("<H", root, off + 14, ftime)
+        struct.pack_into("<H", root, off + 16, fdate)
+        struct.pack_into("<H", root, off + 22, ftime)
+        struct.pack_into("<H", root, off + 24, fdate)
         entry_off += 32
         next_cluster += n
     if entry_off > len(root):
