@@ -29,7 +29,11 @@ if errorlevel 1 (
 )
 
 echo Flashing inkmetrics to %~1 ...
-%PY% -m esptool --chip esp32s3 --port %~1 --baud 921600 write_flash -z ^
+rem --after no_reset keeps the board in the bootloader after writing: the port stays the
+rem same one and the download flag is cleared below BEFORE the board leaves the bootloader
+rem (otherwise the command below races with the USB re-enumeration and fails, leaving a
+rem freshly flashed board sitting in the bootloader).
+%PY% -m esptool --chip esp32s3 --port %~1 --baud 921600 --after no_reset write_flash -z ^
   0x0      "%~dp0bootloader.bin" ^
   0x8000   "%~dp0partition-table.bin" ^
   0xe000   "%~dp0ota_data_initial.bin" ^
@@ -43,9 +47,14 @@ if errorlevel 1 (
 )
 
 rem Clear the sticky RTC bit (a previous /api/boot or self-check fallback sets it) and reset
-rem into the application, so USB does not have to be replugged.
-%PY% -m esptool --chip esp32s3 --port %~1 --before no_reset --after no_reset ^
+rem into the application, so USB does not have to be replugged and the board actually starts.
+%PY% -m esptool --chip esp32s3 --port %~1 --before no_reset --after watchdog_reset ^
   write_mem 0x6000812C 0x00
+if errorlevel 1 (
+  echo.
+  echo WARNING: could not clear the download flag. If the board does not start, unplug USB
+  echo and plug it in again - it will boot normally.
+)
 
 echo.
 echo DONE. The device should start: the screen shows the summary page (ONLINE / OFFLINE /
