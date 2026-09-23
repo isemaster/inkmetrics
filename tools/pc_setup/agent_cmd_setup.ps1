@@ -55,20 +55,29 @@ Remove-Item (Join-Path $Dir 'agent.pid') -Force -ErrorAction SilentlyContinue
 Remove-Item (Join-Path $Dir 'cpu.state') -Force -ErrorAction SilentlyContinue
 Say ('stopped running agents : ' + $stopped)
 
-# the project carries the name inkmetrics since 23.09.2026 (it was inkmetrics until then).
-# An agent installed under the former name is a long-running process with its own loop:
-# killing its task is not enough, it has to be stopped by command line - otherwise every
-# metric goes to the device twice.
-$OldDir = Join-Path $env:ProgramData 'inkmetrics'
-$old = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
-         Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -like ('*' + $OldDir + '\agent.ps1*') })
-foreach ($r in $old) {
+# An agent left by an older installation keeps sending metrics next to the new one: it is a
+# long-running process with its own loop, so killing a task is not enough - it has to be
+# stopped by command line. Nothing here names that old installation: the leftovers are found
+# by what they do, they all run an agent.ps1 from somewhere other than our folder.
+$here = $Dir.TrimEnd('\')
+$stale = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
+           Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -like '*agent.ps1*' -and
+                          $_.CommandLine -notlike ('*' + $here + '*') })
+foreach ($r in $stale) {
     try { Stop-Process -Id $r.ProcessId -Force -ErrorAction Stop; $stopped++ } catch { }
 }
-& schtasks.exe /delete /tn 'inkmetrics agent' /f 2>&1 | Out-Null
-if (Test-Path $OldDir) {
-    Remove-Item -Recurse -Force $OldDir -ErrorAction SilentlyContinue
-    Say ('removed former agent    : ' + $OldDir + ' (stopped: ' + $old.Count + ')')
+if ($stale.Count -gt 0) { Say ('stopped stale agents    : ' + $stale.Count) }
+Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object {
+    $a = (($_.Actions | ForEach-Object { $_.Execute + ' ' + $_.Arguments }) -join ' ')
+    $a -like '*agent.ps1*' -and $a -notlike ('*' + $here + '*')
+} | ForEach-Object {
+    & schtasks.exe /delete /tn $_.TaskName /f 2>&1 | Out-Null
+    Say ('removed stale task      : ' + $_.TaskName)
+}
+foreach ($d in @(Get-ChildItem $env:ProgramData -Directory -ErrorAction SilentlyContinue | Where-Object {
+        $_.FullName.TrimEnd('\') -ne $here -and (Test-Path (Join-Path $_.FullName 'agent.ps1')) })) {
+    Remove-Item -Recurse -Force $d.FullName -ErrorAction SilentlyContinue
+    Say ('removed stale folder    : ' + $d.FullName)
 }
 
 # ---------------------------------------------------------------- 2. the fixed address

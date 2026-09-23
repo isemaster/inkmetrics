@@ -104,12 +104,11 @@ bool tud_msc_test_unit_ready_cb(uint8_t lun)
  * и стек TinyUSB в этой версии выставляет его сам (msc_device.c:
  * `inquiry_rsp->is_removable = 1`). При RMB=1 Windows заводит диск не как «Диск», а как
  * «Дисковод гибких дисков»: служба sfloppy, буква A:, в Проводнике «Дискета (A:)» —
- * то есть «флешки» на вид нет, хотя файлы на ней есть (SETUP.CMD читается).
- * Доказательство: HKLM\SYSTEM\CurrentControlSet\Enum\USBSTOR показывает нашу сборку как
- * `SFloppy&Ven_inkmetrics&Prod_monitor_disk` со службой sfloppy (и SuperFloppy=1), а
- * Arduino-сборку — как `Disk&Ven_&Prod_` со службой disk (Windows давал ей букву E:).
- * У Arduino-ядра TinyUSB был старше и бит не выставлял. Ставим RMB=0 — и Windows
- * показывает обычный диск с буквой. */
+ * то есть «флешки» на вид нет, хотя файлы на ней есть (instagent.cmd читается).
+ * Доказательство: HKLM\SYSTEM\CurrentControlSet\Enum\USBSTOR держал сборку того времени
+ * как SFloppy-устройство со службой sfloppy (и SuperFloppy=1), тогда как сборки с более
+ * новым TinyUSB видны как обычный `Disk` (Windows давал им букву). Ставим RMB=0 — и
+ * Windows показывает диск как диск. */
 uint32_t tud_msc_inquiry2_cb(uint8_t lun, scsi_inquiry_resp_t *rsp, uint32_t bufsize)
 {
     (void)lun;

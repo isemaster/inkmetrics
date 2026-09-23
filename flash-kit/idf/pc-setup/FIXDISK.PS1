@@ -2,8 +2,8 @@
  reset_disk_node.ps1 - make Windows classify the device disk from scratch. Run AS ADMIN.
 
  Symptom: the device mass-storage interface is bound (USB\Class_08&SubClass_06&Prot_50,
- service USBSTOR) but no disk appears - Windows created a "floppy" device instead
- (USBSTOR\SFloppy&Ven_inkmetrics&Prod_monitor_*) and an empty A: with no media. That key is
+ service USBSTOR) but no disk appears - Windows kept a "floppy" device from an earlier
+ classification (USBSTOR\SFloppy&...*) and an empty A: with no media. That key is
  cached from an older firmware build; the current firmware answers INQUIRY with
  removable=0, so a fresh enumeration should produce a normal disk.
 
@@ -26,7 +26,7 @@ if (-not $admin) { Say 'NO ADMIN RIGHTS - run as administrator.'; exit 1 }
 
 Say '--- 1. storage nodes of the device (before) ---'
 $nodes = @(Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue |
-           Where-Object { $_.InstanceId -like '*INKMETRICS*' -or $_.InstanceId -like '*inkmetrics*' })
+           Where-Object { $_.InstanceId -like '*INKMETRICS*' })
 if ($nodes.Count -eq 0) { Say '  none found' }
 foreach ($n in $nodes) { Say ('  ' + $n.Status + '  ' + $n.Class + '  ' + $n.FriendlyName + '  ' + $n.InstanceId) }
 
@@ -41,8 +41,8 @@ Start-Sleep -Seconds 10
 
 Say '--- 3. what Windows enumerated now ---'
 $after = @(Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue |
-           Where-Object { $_.InstanceId -like '*INKMETRICS*' -or $_.InstanceId -like '*inkmetrics*' })
-if ($after.Count -eq 0) { Say '  nothing with inkmetrics in the ID' }
+           Where-Object { $_.InstanceId -like '*INKMETRICS*' })
+if ($after.Count -eq 0) { Say '  nothing with INKMETRICS in the ID' }
 foreach ($n in $after) { Say ('  ' + $n.Status + '  ' + $n.Class + '  ' + $n.FriendlyName + '  ' + $n.InstanceId) }
 
 Say '  disk drives:'

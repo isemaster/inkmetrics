@@ -219,10 +219,6 @@ def main() -> int:
     if stale.exists():
         stale.unlink()
         print("  убран устаревший setup-disk.img (диск теперь setup-disk-big.img)")
-    # прошивка со старым именем проекта (inkmetrics до 23.09) в комплекте только путает
-    for old in KIT.glob("inkmetrics*"):
-        old.unlink()
-        print(f"  убран файл прежнего имени: {old.name}")
     for _, name, src in IMAGES:
         shutil.copy2(src, KIT / name)
         print(f"  {name:<22} {src.stat().st_size:>9} Б")

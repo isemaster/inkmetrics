@@ -194,9 +194,14 @@ if (-not (Test-Path $Net)) { $Net = Join-Path $InstallDir 'net.ps1' }
 function Say($m) { Write-Host ('  ' + $m) }
 
 Say ('install folder : ' + $InstallDir + '  (present: ' + (Test-Path $InstallDir) + ')')
-# the former names (the project was inkmetrics until 23.09.2026) are listed as well, so
-# that a machine that still has the old installation is cleaned up in one go
-foreach ($tn in @('inkmetrics agent', 'inkmetrics ICS', 'inkmetrics agent', 'inkmetrics ICS')) {
+# our tasks, plus every task that starts an agent.ps1 from another folder: those belong to an
+# older installation and are removed in one go (the name of that folder does not matter)
+$taskNames = @('inkmetrics agent', 'inkmetrics ICS')
+Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object {
+    $a = (($_.Actions | ForEach-Object { $_.Execute + ' ' + $_.Arguments }) -join ' ')
+    $a -like '*agent.ps1*' -and $a -notlike ('*' + $InstallDir + '*')
+} | ForEach-Object { $taskNames += $_.TaskName }
+foreach ($tn in ($taskNames | Select-Object -Unique)) {
     $t = Get-ScheduledTask -TaskName $tn -ErrorAction SilentlyContinue
     if ($t) { Say ('task "' + $tn + '" : present (' + $t.State + ')') }
     else    { Say ('task "' + $tn + '" : not registered') }
@@ -232,7 +237,7 @@ foreach ($r in $running) {
 Say ('stopped processes : ' + $stopped)
 
 # ---------------------------------------------------------------- 2. tasks
-foreach ($tn in @('inkmetrics agent', 'inkmetrics ICS', 'inkmetrics agent', 'inkmetrics ICS')) {
+foreach ($tn in ($taskNames | Select-Object -Unique)) {
     try {
         Unregister-ScheduledTask -TaskName $tn -Confirm:$false -ErrorAction Stop
         Say ('task removed      : ' + $tn)
@@ -249,11 +254,12 @@ if ($KeepNet) {
 } else {
     Say 'net.ps1 not found - set the device adapter back to DHCP by hand if you need to'
 }
-# ---------------------------------------------------------------- 4. the former folder
-$OldDir = Join-Path $env:ProgramData 'inkmetrics'
-if (Test-Path $OldDir) {
-    Remove-Item -Recurse -Force $OldDir -ErrorAction SilentlyContinue
-    Say ('former folder     : removed ' + $OldDir)
+# ------------------------------------- 4. folders left over by an older installation
+$here = $InstallDir.TrimEnd('\')
+foreach ($d in @(Get-ChildItem $env:ProgramData -Directory -ErrorAction SilentlyContinue | Where-Object {
+        $_.FullName.TrimEnd('\') -ne $here -and (Test-Path (Join-Path $_.FullName 'agent.ps1')) })) {
+    Remove-Item -Recurse -Force $d.FullName -ErrorAction SilentlyContinue
+    Say ('stale folder      : removed ' + $d.FullName)
 }
 Say 'done.'
 exit 0

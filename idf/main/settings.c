@@ -7,8 +7,7 @@
 #include "nvs.h"
 #include "nvs_flash.h"
 
-#define NVS_NS      "inkcfg"    /* набор настроек текущего имени проекта */
-#define NVS_NS_OLD  "inkcfg"   /* прежнее имя (проект звался inkmetrics до 23.09) */
+#define NVS_NS      "inkcfg"    /* набор настроек прибора */
 #define KEY_ROT  "rot"
 #define KEY_WLK  "wlock"
 #define KEY_PING "ping"
@@ -68,42 +67,6 @@ static uint8_t load_slot(const char *key, uint8_t def)
     return def;
 }
 
-/* Переезд настроек со старого имени набора после переименования проекта: если в новом
-   наборе пусто, а в прежнем настройки лежат — переносим их как есть. Срабатывает один
-   раз (при первой загрузке прошивки с новым именем), дальше пишем и читаем только новый
-   набор. Иначе поворот экрана, слоты и узел пинга пришлось бы задавать заново. */
-static void migrate_from_old_ns(void)
-{
-    nvs_handle_t old;
-    if (nvs_open(NVS_NS_OLD, NVS_READONLY, &old) != ESP_OK) {
-        return;                            /* прежнего набора нет — переезжать нечему */
-    }
-    uint16_t rot = 0;
-    if (nvs_get_u16(old, KEY_ROT, &rot) == ESP_OK) {
-        nvs_set_u16(s_nvs, KEY_ROT, rot);
-    }
-    uint8_t wlk = 0;
-    if (nvs_get_u8(old, KEY_WLK, &wlk) == ESP_OK) {
-        nvs_set_u8(s_nvs, KEY_WLK, wlk);
-    }
-    char ping[SETTINGS_PING_LEN] = {0};
-    size_t len = sizeof(ping);
-    if (nvs_get_str(old, KEY_PING, ping, &len) == ESP_OK && ping[0]) {
-        nvs_set_str(s_nvs, KEY_PING, ping);
-    }
-    uint8_t s1 = 0;
-    if (nvs_get_u8(old, KEY_SLOT1, &s1) == ESP_OK) {
-        nvs_set_u8(s_nvs, KEY_SLOT1, s1);
-    }
-    uint8_t s2 = 0;
-    if (nvs_get_u8(old, KEY_SLOT2, &s2) == ESP_OK) {
-        nvs_set_u8(s_nvs, KEY_SLOT2, s2);
-    }
-    nvs_commit(s_nvs);
-    nvs_close(old);
-    ESP_LOGI(TAG, "настройки перенесены из прежнего набора %s", NVS_NS_OLD);
-}
-
 void settings_init(void)
 {
     esp_err_t err = nvs_open(NVS_NS, NVS_READWRITE, &s_nvs);
@@ -112,13 +75,6 @@ void settings_init(void)
         return;
     }
     s_nvs_ok = true;
-
-    uint16_t probe = 0;
-    uint8_t probe8 = 0;
-    if (nvs_get_u16(s_nvs, KEY_ROT, &probe) != ESP_OK &&
-        nvs_get_u8(s_nvs, KEY_ROT, &probe8) != ESP_OK) {
-        migrate_from_old_ns();             /* в новом наборе пусто — ищем прежний */
-    }
 
     uint16_t rot = 0;
     esp_err_t rerr = nvs_get_u16(s_nvs, KEY_ROT, &rot);

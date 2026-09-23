@@ -18,24 +18,16 @@ build-diag/
 tools/*.exe
 tools/*.msi
 
-# дампы прошивок (8 МБ каждый)
+# дампы прошивок и «чёрного ящика»
 firmware/backup/
-
-# бэкапы раздела msc, которые снимает tools/flash_msc_image.py перед записью (1,5–3,8 МБ)
-firmware/media/msc-backup-*.bin
-
-# локальные дампы «чёрного ящика» и синтетические проверки
+firmware/diag-*.bin
 tools/diag-raw.bin
 tools/diag-test.bin
 
-# комплект для заливки на другом ПК: образы не версионируем (их кладут из сборок),
-# инструкции и .bat — в git
-flash-kit/*/*.bin
-flash-kit.zip
-
-# локальные превью кадров
-host/*.png
-host/config.json.bak
+# образ диска прибора: собирается `python tools/make_setup_disk.py` из agent-kit/.
+# Готовая копия лежит в комплекте (flash-kit/idf/) — она и версионируется.
+firmware/media/*.img
+firmware/media/msc-backup-*.bin
 
 # архив залитых сборок (bin/elf/map по 5-10 МБ) — локально, чтобы можно было
 # расшифровать coredump и адреса паники именно той сборки, что была прошита
@@ -43,3 +35,19 @@ firmware/idf-builds/
 
 # готовый архив для переноса на другой ПК (собирается tools/make_flash_kit.py)
 flash-kit-inkmetrics-*.zip
+flash-kit.zip
+
+# рабочие заметки проекта: живут рядом, но в репозиторий не идут
+MEMORY.md
+ISSUES.md
+NEXT-SESSION.md
+instruction.md
+RULES.md
+PLAN.md
+PLAN-ONDEVICE.md
+TZ-SENTINEL-*.md
+ТЗ_*.md
+
+# локальные превью кадров
+host/*.png
+host/config.json.bak
