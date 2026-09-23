@@ -18,7 +18,9 @@ if (-not (Test-Path $Net)) { $Net = Join-Path $InstallDir 'net.ps1' }
 function Say($m) { Write-Host ('  ' + $m) }
 
 Say ('install folder : ' + $InstallDir + '  (present: ' + (Test-Path $InstallDir) + ')')
-foreach ($tn in @('inkmetrics agent', 'inkmetrics ICS')) {
+# the former names (the project was inkmetrics until 23.09.2026) are listed as well, so
+# that a machine that still has the old installation is cleaned up in one go
+foreach ($tn in @('inkmetrics agent', 'inkmetrics ICS', 'inkmetrics agent', 'inkmetrics ICS')) {
     $t = Get-ScheduledTask -TaskName $tn -ErrorAction SilentlyContinue
     if ($t) { Say ('task "' + $tn + '" : present (' + $t.State + ')') }
     else    { Say ('task "' + $tn + '" : not registered') }
@@ -54,7 +56,7 @@ foreach ($r in $running) {
 Say ('stopped processes : ' + $stopped)
 
 # ---------------------------------------------------------------- 2. tasks
-foreach ($tn in @('inkmetrics agent', 'inkmetrics ICS')) {
+foreach ($tn in @('inkmetrics agent', 'inkmetrics ICS', 'inkmetrics agent', 'inkmetrics ICS')) {
     try {
         Unregister-ScheduledTask -TaskName $tn -Confirm:$false -ErrorAction Stop
         Say ('task removed      : ' + $tn)
@@ -70,6 +72,12 @@ if ($KeepNet) {
     & powershell -NoProfile -ExecutionPolicy Bypass -File $Net -Restore -Quiet
 } else {
     Say 'net.ps1 not found - set the device adapter back to DHCP by hand if you need to'
+}
+# ---------------------------------------------------------------- 4. the former folder
+$OldDir = Join-Path $env:ProgramData 'inkmetrics'
+if (Test-Path $OldDir) {
+    Remove-Item -Recurse -Force $OldDir -ErrorAction SilentlyContinue
+    Say ('former folder     : removed ' + $OldDir)
 }
 Say 'done.'
 exit 0

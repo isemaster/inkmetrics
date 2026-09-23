@@ -140,10 +140,11 @@ uint32_t tud_msc_inquiry2_cb(uint8_t lun, scsi_inquiry_resp_t *rsp, uint32_t buf
     tmp.version                = 2;      /* SPC-2 */
     tmp.response_data_format   = 2;
     tmp.additional_length      = sizeof(scsi_inquiry_resp_t) - 5;
-    memcpy(tmp.vendor_id,   "inkmetrics ",     8);
-    memcpy(tmp.product_id,  "monitor drive", 13);   /* имя входит в ключ устройства:
-                                          смена заставляет Windows завести диск заново,
-                                          а не тянуть прежнюю классификацию из реестра */
+    /* Имя диска Windows собирает из vendor_id и product_id. Поле vendor — 8 байт, поле
+       product — 16, поэтому «inkmetrics» целиком не влезает: в vendor идёт «ink», в
+       product — «metrics disk», и диск зовётся «ink metrics disk». Имя входит в ключ
+       устройства: смена заставляет Windows завести диск заново, а не тянуть прежнюю
+       классификацию из реестра (см. 17.09 про «дискету»). */
     memcpy(tmp.product_rev, "1.0",          3);
 
     uint32_t n = (sizeof(tmp) < bufsize) ? (uint32_t)sizeof(tmp) : bufsize;
@@ -157,8 +158,8 @@ void tud_msc_inquiry_cb(uint8_t lun, uint8_t vendor_id[8], uint8_t product_id[16
     memset(vendor_id, ' ', 8);
     memset(product_id, ' ', 16);
     memset(product_rev, ' ', 4);
-    memcpy(vendor_id, "inkmetrics", 7);
-    memcpy(product_id, "monitor disk", 12);
+    memcpy(vendor_id, "ink", 3);
+    memcpy(product_id, "metrics disk", 12);
     memcpy(product_rev, "1.0", 3);
 }
 

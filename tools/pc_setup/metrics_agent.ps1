@@ -144,7 +144,7 @@ function Get-DevicePingTarget {
 
 function Get-Ping {
     param([string]$target)
-    # Internet check for the ONLINE/OFFLINE frame on the device: four ICMP echo requests to
+    # Internet check for the PING line of the device: four ICMP echo requests to
     # the node chosen on the device, the latency is the average of the answers we got. At
     # least one answer means the internet is there. When ICMP stays silent the node may still
     # be reachable (providers and firewalls drop echo requests), so the answer is

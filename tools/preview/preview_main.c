@@ -26,7 +26,7 @@ static void base(screen_state_t *st)
     memset(st, 0, sizeof(*st));
     st->dev_ip = "192.168.7.1";
     st->up_s = 97440;                 /* 1 д 03:04 */
-    st->fw = "0.6.2";
+    st->fw = "0.7.0";
     st->ping_target = "YA.RU";
     st->rotation = 90;
     st->disk_write_lock = false;

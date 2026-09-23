@@ -404,7 +404,7 @@ if ($script:Hints.Count -gt 0) {
     Out-Line 'next steps: nothing to fix - device, agent, tasks and metrics path all look good.'
 }
 Out-Line ''
-Out-Line 'The last proof is the device itself: the frame must read ONLINE and the numbers must match this PC.'
+Out-Line 'The last proof is the device itself: the top line must read PING and the numbers must match this PC.'
 Out-Line 'The CPU and memory numbers there must match this PC - those numbers come from'
 Out-Line 'the agent on this machine, so a match means the whole chain works.'
 

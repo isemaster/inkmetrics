@@ -30,7 +30,7 @@ SOURCE_IMAGE = ROOT / "firmware" / "media" / "setup-disk.img"
 SECTOR = 512
 ROOT_ENTRIES = 512
 FAT_TYPE = b"FAT16   "
-VOLUME_LABEL = b"INKMETRICS    "
+VOLUME_LABEL = b"INKMETRICS "
 VOLUME_ID = 0x1A2B3C4D
 
 
@@ -197,6 +197,11 @@ def build(total_sectors: int, files: list[tuple]) -> bytes:
     root = bytearray(root_sectors * SECTOR)
     next_cluster = 2
     entry_off = 0
+    # Метка тома и в корневом каталоге: Проводник показывает именно эту запись, поля из
+    # загрузочного сектора ему мало — без неё диск остаётся безымянным.
+    root[0:11] = VOLUME_LABEL
+    root[11] = 0x08
+    entry_off = 32
     taken: set[str] = set()
     for item in files:
         name, content = item[0], item[1]

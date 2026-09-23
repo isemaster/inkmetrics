@@ -55,6 +55,22 @@ Remove-Item (Join-Path $Dir 'agent.pid') -Force -ErrorAction SilentlyContinue
 Remove-Item (Join-Path $Dir 'cpu.state') -Force -ErrorAction SilentlyContinue
 Say ('stopped running agents : ' + $stopped)
 
+# the project carries the name inkmetrics since 23.09.2026 (it was inkmetrics until then).
+# An agent installed under the former name is a long-running process with its own loop:
+# killing its task is not enough, it has to be stopped by command line - otherwise every
+# metric goes to the device twice.
+$OldDir = Join-Path $env:ProgramData 'inkmetrics'
+$old = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
+         Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -like ('*' + $OldDir + '\agent.ps1*') })
+foreach ($r in $old) {
+    try { Stop-Process -Id $r.ProcessId -Force -ErrorAction Stop; $stopped++ } catch { }
+}
+& schtasks.exe /delete /tn 'inkmetrics agent' /f 2>&1 | Out-Null
+if (Test-Path $OldDir) {
+    Remove-Item -Recurse -Force $OldDir -ErrorAction SilentlyContinue
+    Say ('removed former agent    : ' + $OldDir + ' (stopped: ' + $old.Count + ')')
+}
+
 # ---------------------------------------------------------------- 2. the fixed address
 if ($KeepNet) {
     Say 'address        : left as is (-KeepNet)'
@@ -112,5 +128,5 @@ if (Test-Path $log) {
 } else {
     Say 'agent.log is not there yet - the first send can take up to a minute'
 }
-Say 'done. The device frame must read ONLINE and the numbers must match this PC.'
+Say 'done. The top line of the device must read PING and the numbers must match this PC.'
 exit 0
