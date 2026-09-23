@@ -47,11 +47,11 @@ Installation (5 steps)
    ("Yes"). The rights are needed once: for the adapter address and the task.
 3. Wait for "set : 192.168.7.2/24, no gateway", "task inkmetrics agent : registered"
    and "Agent installed". The window stays open.
-4. Check the device: the frame must read ONLINE (this PC has internet), below it two large
+4. Check the device: the top line must read PING (this PC has internet), below it two large
    numbers (by default CPU load and GPU load; what to show is chosen on the device setup
    page, see "What the device shows"), then CPU / RAM / DISK percentages and uptime. A
    short PWR press switches to the SETUP screen and back. The numbers must match this PC;
-   NO DATA in the frame means the agent is not sending (see step 5).
+   NO DATA in the top line means the agent is not sending (see step 5).
 5. Check on the PC (either):
 
        schtasks /query /tn "inkmetrics agent" /v /fo LIST
@@ -61,7 +61,7 @@ Installation (5 steps)
 
 What the device shows
 ---------------------
-The frame: "PING - <ms> - <answers out of four>" when this PC has internet (for instance
+The top line: "PING - <ms> - <answers out of four>" when this PC has internet (for instance
 "PING - 15MS - 4/4"); "OFFLINE - 0/4" when the pings went unanswered; NO DATA - no metrics
 for 90 seconds, the numbers turn into dashes.
 
@@ -70,10 +70,10 @@ http://192.168.7.1/setup, the field "the node for the internet check"): the agen
 from the device once a minute, so a single setting serves every PC and no files have to be
 edited on each machine. The agent sends four pings and shows the average of the answers; if
 none of them came back it also checks a TCP connect to port 443 of the same node (providers
-often ignore pings while the port stays open) and prints TCP in the frame instead of the
+often ignore pings while the port stays open) and prints TCP instead of the
 count. With the field empty or the device unreachable the fallback is 8.8.8.8.
 
-Below the frame sit two large numbers. What they show is chosen on the device setup page:
+Below the top line sit two large numbers. What they show is chosen on the device setup page:
 open http://192.168.7.1/setup in a browser on this PC and pick from the lists "Крупное
 число слева" and "Крупное число справа" (the large number, left and right). The choices
 are CPU %, RAM %, DISK %, GPU0 %, GPU1 %, "GPU: second, else first", GPU0 °C, GPU1 °C and
@@ -87,7 +87,7 @@ driver) the device shows a dash, not a zero.
 
 A short PWR press switches between the summary screen and SETUP. SETUP shows the device
 address, the SHOW line (what is in the large numbers), the PING NODE line (the node used for
-the internet check) and the firmware version. Firmware 0.6.1 or newer.
+the internet check) and the firmware version. Firmware 0.6.2 or newer.
 
 What the agent does
 -------------------
@@ -95,7 +95,7 @@ Every 60 seconds the agent collects this PC's metrics and sends them to the devi
 POST http://192.168.7.1/ingest: CPU load, memory, disk, temperature and load of every
 NVIDIA card, uptime. Separately the agent checks this PC's internet access: the node comes
 from the device settings, four pings are sent and a TCP 443 check is made when ICMP stays
-silent. That answer is what the device prints in the frame as "PING - <ms> - <answers>" or
+silent. That answer is what the device prints in the top line as "PING - <ms> - <answers>" or
 "OFFLINE". The agent log shows the same: "sent ok (cpu=..%, ping YA.RU 15ms 4/4)".
 
 When no metrics arrive for 90 seconds the device shows NO DATA and replaces the numbers

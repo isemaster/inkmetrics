@@ -137,7 +137,8 @@ def main() -> int:
     x = gap
     for title, img in imgs:
         sheet.paste(img.resize((W * SCALE, H * SCALE), Image.NEAREST), (x, 2 * gap + 26))
-        sd.rectangle([x - 1, 2 * gap + 25, x + W * SCALE, 2 * gap + 26 + H * SCALE], outline=0)
+        # Рамку вокруг кадра не рисуем: на самой панели её нет, а в макете она читалась
+        # как часть экрана (пользователь дважды просил её убрать — 23.09).
         sd.text((x, gap + 4), title, font=label, fill=0)
         x += W * SCALE + gap
     OUT_PNG.parent.mkdir(parents=True, exist_ok=True)

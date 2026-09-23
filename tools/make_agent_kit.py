@@ -140,7 +140,7 @@ GPU0 %, GPU1 %, "GPU: вторая, иначе первая", GPU0 °C, GPU1 °C
 
 Короткое нажатие PWR переключает сводный экран и SETUP. На SETUP видно адрес прибора,
 строку SHOW (что стоит в крупных числах), строку PING NODE (узел проверки интернета) и
-версию прошивки. Прошивка 0.6.1 и новее.
+версию прошивки. Прошивка 0.6.2 и новее.
 
 Что агент делает
 ----------------
@@ -328,7 +328,7 @@ driver) the device shows a dash, not a zero.
 
 A short PWR press switches between the summary screen and SETUP. SETUP shows the device
 address, the SHOW line (what is in the large numbers), the PING NODE line (the node used for
-the internet check) and the firmware version. Firmware 0.6.1 or newer.
+the internet check) and the firmware version. Firmware 0.6.2 or newer.
 
 What the agent does
 -------------------

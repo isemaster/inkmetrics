@@ -87,7 +87,7 @@ driver) the device shows a dash, not a zero.
 
 A short PWR press switches between the summary screen and SETUP. SETUP shows the device
 address, the SHOW line (what is in the large numbers), the PING NODE line (the node used for
-the internet check) and the firmware version. Firmware 0.6.1 or newer.
+the internet check) and the firmware version. Firmware 0.6.2 or newer.
 
 What the agent does
 -------------------

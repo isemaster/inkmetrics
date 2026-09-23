@@ -66,7 +66,7 @@
 #define PING_TARGET_NAME "ya.ru"     /* цель пинга по умолчанию (значение хранится в настройках) */
 #define PING_TARGET_IP   "77.88.55.242"   /* запасной адрес, если DNS не отвечает */
 #define BOOT_GPIO     0
-#define FW_VERSION    "0.6.1-idf"
+#define FW_VERSION    "0.6.2-idf"
 
 static const char *TAG = "eink";
 static esp_netif_t *s_netif = NULL;
