@@ -1,154 +1,67 @@
-# Заливка прошивки inkmetrics с другого компьютера
+# Комплект для заливки прибора (`flash-kit`)
 
-Папку `flash-kit` скопируй целиком (флешка, сеть) — больше ничего не нужно, кроме Python
-с `esptool` (см. «Если Python ставить не хочется» — там варианты без него).
+Скопируйте папку целиком на другой компьютер — больше ничего не нужно, кроме Python 3
+с `esptool`. Ни ESP-IDF, ни Arduino IDE, ни интернета прибору не требуется.
 
-| Папка | Что внутри | Когда заливать |
-|---|---|---|
-| `arduino/` | рабочая прошивка прибора (Arduino-версия): отдаёт диск `E:` со страницей `INKMETRICS.HTM` + COM-порт приложения | **чтобы вернуть прибор в работу** |
-| `idf/` | прошивка на ESP-IDF: USB-сеть (прибор как сетевая карта), диск хоста 3,69 МБ, метрики ПК на экране (`POST /ingest`, страница `HOST SYS`). Рядом лежит образ диска `setup-disk-big.img` — он пишется в раздел `msc` по адресу `0x430000` (в `flash.bat` уже прописан). Прошивка идёт как раньше: кнопка `BOOT` при подключении USB. Самопроверка (уход в загрузчик после 5 минут молчания хоста) в рабочем варианте выключается: `SELFCHECK_ENABLED 0` в `idf/main/selfcheck.h` | основная сборка прибора |
-| `idf/pc-setup/` | скрипты настройки ПК: `SETUP.CMD` (точка входа), `CHECK.CMD` + `CHECK.PS1` (проверка «заработал ли агент»), `METRICS.PS1`, `MINSTALL.PS1`, `AGENT.PS1`, `ICS.PS1`, `NETCHECK.PS1`, `FIXUSB.PS1`, инструкции. Те же файлы прибор отдаёт на своём диске `E:` | чтобы настроить компьютер и проверить, что метрики идут |
+## Что внутри
 
-## Почему прибор «то определяется, то отсоединяется» раз в секунду
+| Что | Зачем |
+|---|---|
+| `idf/flash.bat` | заливка прошивки и диска одной командой: адреса и имена файлов уже прописаны |
+| `idf/bootloader.bin`, `idf/partition-table.bin`, `idf/ota_data_initial.bin` | служебные части прошивки |
+| `idf/inkmetrics_idf.bin` | приложение (пишется по адресу `0x20000` — под OTA отведены две копии) |
+| `idf/setup-disk-big.img` | образ диска прибора 3,69 МБ (раздел `msc`, адрес `0x430000`): внутри `instagent.cmd` и инструкции |
+| `idf/pc-setup/` | те же скрипты агента и проверки, что прибор отдаёт на своём диске |
+| `idf/diag/` | диагностика: журнал прибора, разбор паник |
+| `idf/START-HERE.txt` | инструкция для новичка: что поставить, как залить, что должно получиться |
+| `idf/SHA256SUMS.txt` | контрольные суммы файлов комплекта |
 
-Это **не** режим загрузчика. Так выглядит приложение: чип перезапускается в цикле, и Windows
-успевает увидеть USB-устройство и снова потерять его. В режиме загрузчика (ROM) порт
-появляется один раз и **не пропадает** — именно в нём и можно шить.
+## Как залить
 
-Две типичные причины такого цикла, различаются просто:
-- **Питание/кабель/порт** — хаб, слабый порт или плохой кабель: плата проседает по питанию и
-  сбрасывается. Признак: мигает даже порт загрузчика (с зажатым BOOT), либо цикл ~1 раз в секунду.
-  Лечение: подключить напрямую к порту ПК (без хаба), другой кабель, другой порт (лучше USB 2.0).
-- **Прошивка** — приложение само сбрасывается. Признак: порт загрузчика стоит ровно, а вот
-  устройство приложения мигает. Лечение: залить `arduino/` (рабочая версия).
+Коротко (подробно — `idf/START-HERE.txt`):
 
-## Шаг 1. Войти в режим загрузчика
+1. `pip install esptool` — один раз.
+2. Прибор в режим загрузчика: зажать `BOOT`, не отпуская подключить USB, подержать ~2 секунды,
+   отпустить. Порт обычно `COM5` и выше; список: `python -m serial.tools.list_ports -v`.
+3. `idf\flash.bat COM5` — подставьте свой порт.
 
-1. Отключи прибор от USB.
-2. Зажми кнопку **BOOT** и, не отпуская её, подключи USB.
-3. Подержи ~2 секунды и отпусти BOOT.
-4. Проверь, что порт появился и стабилен:
+После записи прибор запускается сам: на экране сводка метрик, в Проводнике диск `INKMETRICS`
+и сетевая карта `192.168.7.1`. С диска запускается `instagent.cmd` (от имени администратора).
 
-   ```powershell
-   Get-PnpDevice -PresentOnly | Where-Object { $_.InstanceId -like '*303A*' } |
-       Select-Object Status, Class, FriendlyName, InstanceId | Format-Table -AutoSize
-   ```
+Суммы: `certutil -hashfile idf\inkmetrics_idf.bin SHA256` и сверить с `SHA256SUMS.txt`.
 
-   Нужно увидеть `USB JTAG/serial debug unit` (VID `303A`, PID `1001`) и/или
-   «Последовательный интерфейс USB (COMx)». Обычно это `COM5` и выше.
-
-5. Запомни номер порта (`COMx`). Список портов с описанием: `python -m serial.tools.list_ports -v`
-
-Если порт не появился или мигает — снова BOOT + подключение USB; убери хаб; возьми другой
-кабель; если на плате есть кнопка RESET — зажми BOOT и нажми RESET.
-
-## Шаг 2. Поставить esptool (один раз)
-
-Нужен Python 3 с python.org, затем:
+Ручная заливка (если `.bat` не подходит) — те же адреса, что внутри `flash.bat`:
 
 ```
-pip install esptool
+python -m esptool --chip esp32s3 --port COM5 --baud 921600 write_flash -z ^
+  0x0      bootloader.bin ^
+  0x8000   partition-table.bin ^
+  0xe000   ota_data_initial.bin ^
+  0x20000  inkmetrics_idf.bin ^
+  0x430000 setup-disk-big.img
 ```
 
-## Шаг 3. Залить прошивку
+## Если прибор «подключается и отключается»
 
-В папке нужного варианта:
+Две разные причины, различаются просто:
 
-```
-flash-merged.bat COM5      <- проще всего: один файл, один адрес (0x0)
-flash.bat COM5             <- то же самое, но четырьмя файлами с явными адресами
-```
+* **Кабель, порт или хаб**: плата проседает по питанию и перезапускается. Подключить напрямую
+  к порту ПК (лучше USB 2.0), взять другой кабель. Признак: мигает даже порт загрузчика.
+* **Прошивка**: приложение само уходит в перезапуск. Лечение одно — залить комплект заново;
+  если не помогло, смотреть журнал (`idf/diag/`).
 
-(подставь свой порт; скрипт сам найдёт интерпретатор с esptool — `python` или `py -3`).
+Отдельно: если хост молчит 5 минут (ПК выключен, агент не установлен), прибор **сам уходит
+в режим загрузчика** — так задумано (самопроверка, `SELFCHECK_FALLBACK_MS` в
+`idf/main/selfcheck.h`), чтобы прошивать без кнопки `BOOT`. Это не поломка: запустите
+`instagent.cmd` или залейте комплект заново.
 
-Вручную, если скрипты не годятся.
+## Как пересобрать комплект
 
-**Arduino-версия** — одним файлом (из папки `arduino`):
-
-```
-python -m esptool --chip esp32s3 --port COM5 --baud 921600 write-flash -z ^
-  0x0 inkmetrics-arduino-0x0.bin
-```
-
-**Arduino-версия** — четырьмя файлами (то же содержимое, явные адреса):
-
-```
-python -m esptool --chip esp32s3 --port COM5 --baud 921600 write-flash -z ^
-  0x0     inkmetrics.ino.bootloader.bin ^
-  0x8000  inkmetrics.ino.partitions.bin ^
-  0xe000  boot_app0.bin ^
-  0x10000 inkmetrics.ino.bin
-```
-
-**IDF-версия** — одним файлом (из папки `idf`):
-
-```
-python -m esptool --chip esp32s3 --port COM5 --baud 921600 write-flash -z ^
-  0x0 inkmetrics-idf-0x0.bin
-```
-
-**IDF-версия** — четырьмя файлами:
-
-```
-python -m esptool --chip esp32s3 --port COM5 --baud 921600 write-flash -z ^
-  0x0     bootloader.bin ^
-  0x8000  partition-table.bin ^
-  0xe000  ota_data_initial.bin ^
-  0x20000 inkmetrics_idf.bin
-```
-
-Адреса важны: у IDF-версии приложение лежит на `0x20000` (две копии под OTA), у Arduino —
-на `0x10000`. Поэтому объединённые образы удобнее: там адреса уже проставлены, ошибиться
-нельзя. Объединённый образ пишется строго с `0x0`.
-
-## Если Python ставить не хочется
-
-- **Flash Download Tool** (Espressif, Windows, без Python): вкладка `ESP32-S3`, режим `DIO`,
-  80 МГц, четыре файла с адресами из команды выше, кнопка START.
-- **Веб-прошивальщик** `esptool-js` в Chrome: <https://espressif.github.io/esptool-js/> —
-  в нём нужно указать адрес и файл для каждой из четырёх позиций, порт тот же (ROM).
-
-Оба варианта требуют того же: прибор в режиме загрузчика (BOOT + подключение USB).
-
-## Шаг 4. Проверка
-
-esptool сам сбросит чип после записи.
-
-- После **Arduino-версии**: появится съёмный диск `E:` с `INKMETRICS.HTM` и COM-порт приложения;
-  страница открывается в Chrome/Edge и работает через Web Serial.
-- После **IDF-версии**: Windows покажет сетевую карту `Remote NDIS based Internet Sharing
-  Device` (`VID_303A&PID_4020`); адрес по DHCP сейчас не выдаётся — это незакрытый вопрос,
-  см. `idf/README.md` в проекте.
-
-Если после заливки Arduino-версии прибор всё равно мигает — дело не в прошивке, а в
-питании/кабеле/порте (либо плата повреждена).
-
-## Как обновить комплект после новой сборки
-
-Образы (`*.bin`) в git не хранятся — их кладут заново из сборок проекта:
+Всё делает один скрипт из корня репозитория: он копирует образы, генерирует `flash.bat`,
+`START-HERE.txt` и `SHA256SUMS.txt`.
 
 ```bash
-cd /d/inkmetrics            # рабочая копия проекта (исходный — D:\inkmetrics)
-# Arduino-версия: bash tools/build.sh   (собирает firmware/build/*.bin)
-cp firmware/build/inkmetrics.ino.bootloader.bin firmware/build/inkmetrics.ino.partitions.bin \
-   firmware/build/inkmetrics.ino.bin flash-kit/arduino/
-cp "$LOCALAPPDATA/Arduino15/packages/esp32/hardware/esp32/2.0.9/tools/partitions/boot_app0.bin" flash-kit/arduino/
-# IDF-версия: python C:/esp/idf_build.py -C D:/inkmetrics/idf build
-cp idf/build/bootloader/bootloader.bin idf/build/partition_table/partition-table.bin \
-   idf/build/ota_data_initial.bin idf/build/inkmetrics_idf.bin flash-kit/idf/
-# диск хоста: образ 3,69 МБ (MBR + FAT16) собирается из tools/pc_setup и заливается в раздел msc
-python tools/make_setup_disk.py                 # -> firmware/media/setup-disk-big.img
-cp firmware/media/setup-disk-big.img flash-kit/idf/
-cp tools/pc_setup/metrics_agent.ps1  flash-kit/idf/pc-setup/METRICS.PS1
-cp tools/pc_setup/metrics_install.ps1 flash-kit/idf/pc-setup/MINSTALL.PS1
-# объединённые образы (пишутся с 0x0)
-cd flash-kit/arduino && /c/Python314/python.exe -m esptool --chip esp32s3 merge-bin \
-   -o inkmetrics-arduino-0x0.bin 0x0 inkmetrics.ino.bootloader.bin 0x8000 inkmetrics.ino.partitions.bin \
-   0xe000 boot_app0.bin 0x10000 inkmetrics.ino.bin
-cd ../idf && /c/Python314/python.exe -m esptool --chip esp32s3 merge-bin \
-   -o inkmetrics-idf-0x0.bin 0x0 bootloader.bin 0x8000 partition-table.bin \
-   0xe000 ota_data_initial.bin 0x20000 inkmetrics_idf.bin
-# контрольные суммы комплекта
-cd /d/inkmetrics/flash-kit/idf && sha256sum bootloader.bin partition-table.bin ota_data_initial.bin \
-   inkmetrics_idf.bin setup-disk-big.img setup-disk.img > SHA256SUMS.txt
+idf.py -C idf build              # прошивка → idf/build/inkmetrics_idf.bin
+python tools/make_setup_disk.py  # образ диска прибора → firmware/media/setup-disk-big.img
+python tools/make_flash_kit.py   # → flash-kit/idf/
 ```

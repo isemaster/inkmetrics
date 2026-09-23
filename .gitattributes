@@ -1,0 +1,9 @@
+# Окончания строк: Windows-скрипты должны попадать в рабочую копию с CRLF,
+# иначе cmd.exe/PowerShell на чужой машине спотыкаются о метки и продолжения строк.
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+*.ps1  text eol=crlf
+
+# Артефакты комплекта — двоичные, git не должен их «нормализовать».
+*.bin  binary
+*.img  binary
