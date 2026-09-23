@@ -26,8 +26,10 @@ W = H = 200
 SCALE = 3
 
 FRAMES = [
-    ("summary.pgm", "ONLINE — у хоста есть интернет (PWR -> SETUP)"),
-    ("setup.pgm", "SETUP — вход по PWR"),
+    ("summary.pgm", "ONLINE — крупно CPU % и загрузка второй карты"),
+    ("temps.pgm", "в крупных числах температуры карт (78° 79°)"),
+    ("wide.pgm", "полная загрузка 100 %: три знака — средний кегль"),
+    ("setup.pgm", "SETUP — строка SHOW с выбранной парой"),
     ("offline.pgm", "OFFLINE — интернета у хоста нет"),
     ("nodata.pgm", "NO DATA — агент молчит"),
 ]
@@ -43,6 +45,26 @@ def load_pgm(path: Path) -> Image.Image:
     img = Image.new("L", (w, h), 255)
     img.putdata(vals[:w * h])
     return img
+
+
+def band_groups(img: Image.Image, y0: int, y1: int):
+    """Группы чернил по горизонтали в полосе строк и самый узкий промежуток между ними.
+
+    Нужно для числовых полос: два числа, слипшиеся в одно, выглядят на экране как одно
+    число, и по строкам это не видно — только по колонкам."""
+    px = img.load()
+    used = [x for x in range(W) if any(px[x, y] < 128 for y in range(y0, y1 + 1))]
+    if not used:
+        return [], None
+    groups, start, prev = [], used[0], used[0]
+    for x in used[1:]:
+        if x != prev + 1:
+            groups.append((start, prev))
+            start = x
+        prev = x
+    groups.append((start, prev))
+    gaps = [groups[i + 1][0] - groups[i][1] - 1 for i in range(len(groups) - 1)]
+    return groups, (min(gaps) if gaps else None)
 
 
 def report(name: str, img: Image.Image) -> None:
@@ -81,6 +103,16 @@ def report(name: str, img: Image.Image) -> None:
           f"колонки {min(cols)}..{max(cols)}")
     print(f"  блоков {len(blocks)}: " + ", ".join(f"{a}..{b}" for a, b in blocks))
     print(f"  самый большой промежуток внутри: {big[1]} px (на строке {big[0]})")
+
+    # числовые полосы: где именно стоит чернила по горизонтали и не слиплось ли
+    for a, b in blocks:
+        if 10 <= b - a + 1 <= 45:
+            groups, gap = band_groups(img, a, b)
+            if not groups:
+                continue
+            where = ", ".join(f"{g0}..{g1}" for g0, g1 in groups)
+            tail = "слиплось!" if gap is not None and gap < 2 else f"{gap} px"
+            print(f"  полоса {a}..{b}: группы {where} · узкий промежуток {tail}")
     if max(cols) > W - 1 or max(rows) > H - 1:
         raise SystemExit(f"  ОШИБКА: содержимое выходит за {W}x{H}")
 

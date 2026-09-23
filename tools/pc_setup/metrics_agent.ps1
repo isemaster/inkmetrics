@@ -188,20 +188,86 @@ function Get-CpuTemp {
     return $null
 }
 
+function Get-GpuCounters {
+    # Fallback for machines without nvidia-smi: GPU load from the WDDM per-engine counters -
+    # the same source Task Manager uses. Works with any vendor (NVIDIA, AMD, Intel) on
+    # Windows 10 1709+. Per adapter (luid): sum each engine type over all processes, then
+    # take the busiest engine. Adapters are ordered by dedicated video memory, largest
+    # first, so card 0 is the discrete one and card 1 the integrated one. Temperatures and
+    # memory percentages are NOT available this way - the caller leaves them empty, and the
+    # device shows dashes (unknown is not zero).
+    try {
+        $paths = (Get-Counter -ListSet 'GPU Engine' -ErrorAction Stop).Paths |
+                 Where-Object { $_ -like '*Utilization Percentage*' }
+        if (-not $paths) { return @() }
+        $samples = Get-Counter -Counter $paths -ErrorAction Stop
+    } catch {
+        return @()
+    }
+
+    $busy = @{}          # luid -> engine type -> summed utilisation
+    foreach ($c in $samples.CounterSamples) {
+        if ($c.InstanceName -match 'luid_(0x[0-9a-fA-F]+)_(0x[0-9a-fA-F]+)_.*engtype_([A-Za-z0-9]+)$') {
+            $luid = $Matches[1] + '_' + $Matches[2]
+            $type = $Matches[3].ToLower()
+            if (-not $busy.ContainsKey($luid)) { $busy[$luid] = @{} }
+            if (-not $busy[$luid].ContainsKey($type)) { $busy[$luid][$type] = 0.0 }
+            $busy[$luid][$type] += [double]$c.CookedValue
+        }
+    }
+    if ($busy.Count -eq 0) { return @() }
+
+    $vram = @{}
+    try {
+        $mpaths = (Get-Counter -ListSet 'GPU Adapter Memory' -ErrorAction Stop).Paths |
+                  Where-Object { $_ -like '*Dedicated Usage*' }
+        if ($mpaths) {
+            foreach ($c in (Get-Counter -Counter $mpaths -ErrorAction Stop).CounterSamples) {
+                if ($c.InstanceName -match 'luid_(0x[0-9a-fA-F]+)_(0x[0-9a-fA-F]+)') {
+                    $k = $Matches[1] + '_' + $Matches[2]
+                    if (-not $vram.ContainsKey($k)) { $vram[$k] = 0.0 }
+                    $vram[$k] += [double]$c.CookedValue
+                }
+            }
+        }
+    } catch { }
+
+    $cards = @()
+    foreach ($luid in $busy.Keys) {
+        $max = 0.0
+        foreach ($t in $busy[$luid].Keys) {
+            if ($busy[$luid][$t] -gt $max) { $max = $busy[$luid][$t] }
+        }
+        if ($max -gt 100) { $max = 100 }
+        $v = 0.0
+        if ($vram.ContainsKey($luid)) { $v = $vram[$luid] }
+        $cards += @{ util = [math]::Round($max, 1); vram = $v }
+    }
+    $cards = @($cards | Sort-Object -Property @{ Expression = { $_.vram }; Descending = $true })
+
+    $out = @()
+    foreach ($g in $cards) {
+        $out += @{ util = $g.util; temp = $null; mem = $null }
+    }
+    return $out
+}
+
 function Get-Gpu {
     # GPU load / temperature / memory through nvidia-smi (if present and the driver is alive).
+    # No nvidia-smi (AMD, Intel, or nothing installed): the WDDM counters are used instead.
+
     # Returns one entry per card, in the order nvidia-smi lists them. No nvidia-smi,
     # a non-NVIDIA card or a dead driver: the list is empty and the device shows dashes
     # in both slots (an empty list is not zero load - it is "unknown").
     try {
         $smi = Get-Command nvidia-smi -ErrorAction Stop
     } catch {
-        return @()
+        return (Get-GpuCounters)
     }
     try {
         $lines = & $smi.Source --query-gpu=index,utilization.gpu,temperature.gpu,memory.used,memory.total `
                                --format=csv,noheader,nounits 2>$null
-        if (-not $lines) { return @() }
+        if (-not $lines) { return (Get-GpuCounters) }
         $out = @()
         foreach ($line in $lines) {
             $p = $line -split ','
@@ -215,9 +281,9 @@ function Get-Gpu {
                 mem  = $memPct
             }
         }
-        return $out
+        if ($out.Count -gt 0) { return $out }
     } catch { }
-    return @()
+    return (Get-GpuCounters)
 }
 
 function Get-SmartStatus {

@@ -66,7 +66,7 @@
 #define PING_TARGET_NAME "ya.ru"     /* цель пинга по умолчанию (значение хранится в настройках) */
 #define PING_TARGET_IP   "77.88.55.242"   /* запасной адрес, если DNS не отвечает */
 #define BOOT_GPIO     0
-#define FW_VERSION    "0.5.0-idf"
+#define FW_VERSION    "0.6.0-idf"
 
 static const char *TAG = "eink";
 static esp_netif_t *s_netif = NULL;
@@ -384,10 +384,26 @@ static const char SETUP_HTML_HEAD[] =
     ".ok{color:#7fd}.hint{color:#888;font-size:13px}"
     "</style></head><body><h1>Настройки прибора</h1>";
 
+/* Список вариантов для двух крупных чисел сводного экрана. Набор одинаковый, разница
+   только в том, что выбрано; подписи берём из settings.c, чтобы страница и лог
+   называли одно и то же одинаково. */
+static int slot_options(char *out, size_t len, uint8_t cur)
+{
+    int n = 0;
+    for (uint8_t k = 0; k < SLOT_KIND_MAX && n < (int)len - 1; k++) {
+        n += snprintf(out + n, len - (size_t)n, "<option value=\"%u\"%s>%s</option>",
+                      (unsigned)k, k == cur ? " selected" : "", settings_slot_name(k));
+    }
+    return n;
+}
+
 static esp_err_t setup_get(httpd_req_t *req)
 {
-    static char page[2304];
+    static char page[3584];
     const settings_t *cfg = settings_get();
+    char opts1[512], opts2[512];
+    slot_options(opts1, sizeof(opts1), cfg->slot[0]);
+    slot_options(opts2, sizeof(opts2), cfg->slot[1]);
     uint32_t disk_kb = 0;
     bool wlock = false;
     msc_info(NULL, &wlock, NULL, NULL);
@@ -404,12 +420,16 @@ static esp_err_t setup_get(httpd_req_t *req)
         "<option value=\"90\"%s>90°</option>"
         "<option value=\"180\"%s>180° — вверх ногами</option>"
         "<option value=\"270\"%s>270°</option></select>"
+        "<label>Крупное число слева</label><select name=\"slot1\">%s</select>"
+        "<label>Крупное число справа</label><select name=\"slot2\">%s</select>"
         "<label>Цель пинга в интернете</label>"
         "<input type=\"text\" name=\"ping\" maxlength=\"31\" value=\"%s\">"
         "<label><input type=\"checkbox\" name=\"wlock\"%s> Диск прибора только для чтения</label>"
         "<button type=\"submit\">Сохранить</button></form>"
         "<p class=\"hint\">Диск: %u КБ, сейчас %s. Прошивка %s.</p>"
-        "<p class=\"hint\">Кнопками прибора тоже можно: на экране SETTINGS короткое BOOT — поворот,"
+        "<p class=\"hint\">Крупные числа — то, что видно на сводном экране издалека."
+        " «GPU: вторая, иначе первая» значит: вторая карта, а если она одна — первая.</p>"
+        "<p class=\"hint\">Кнопками прибора тоже можно: на экране SETUP короткое BOOT — поворот,"
         " удержание BOOT — блокировка диска. PWR листает страницы.</p>"
         "<p><a href=\"/\">Состояние</a></p></body></html>",
         SETUP_HTML_HEAD,
@@ -417,6 +437,8 @@ static esp_err_t setup_get(httpd_req_t *req)
         cfg->rotation == 90 ? " selected" : "",
         cfg->rotation == 180 ? " selected" : "",
         cfg->rotation == 270 ? " selected" : "",
+        opts1,
+        opts2,
         cfg->ping_target,
         cfg->disk_write_lock ? " checked" : "",
         (unsigned)disk_kb,
@@ -478,11 +500,21 @@ static esp_err_t settings_post(httpd_req_t *req)
     }
     form_value(body, "wlock", val, sizeof(val));
     settings_set_disk_write_lock(strcmp(val, "on") == 0 || strcmp(val, "1") == 0);
+    form_value(body, "slot1", val, sizeof(val));
+    if (val[0]) {
+        settings_set_slot(0, (uint8_t)atoi(val));
+    }
+    form_value(body, "slot2", val, sizeof(val));
+    if (val[0]) {
+        settings_set_slot(1, (uint8_t)atoi(val));
+    }
 
-    ESP_LOGI(TAG, "настройки сохранены: поворот %u, диск %s, цель %s",
+    ESP_LOGI(TAG, "настройки сохранены: поворот %u, диск %s, цель %s, экран: %s + %s",
              (unsigned)settings_get()->rotation,
              settings_get()->disk_write_lock ? "только чтение" : "чтение и запись",
-             settings_get()->ping_target);
+             settings_get()->ping_target,
+             settings_slot_name(settings_get()->slot[0]),
+             settings_slot_name(settings_get()->slot[1]));
     httpd_resp_set_status(req, "303 See Other");
     httpd_resp_set_hdr(req, "Location", "/setup");
     return httpd_resp_send(req, "", 0);
@@ -589,7 +621,7 @@ static esp_err_t state_get(httpd_req_t *req)
         "\"time\":\"%s\",\"date\":\"%s\",\"time_valid\":%u,"
         "\"host\":\"%s\",\"host_name\":\"%s\",\"host_known\":%u,"
         "\"ports\":\"%s\",\"ports_checked\":%u,\"http_ok\":%u,\"http_code\":%d,\"http_ms\":%u,"
-        "\"disk_kb\":%u,\"wlock\":%u,\"rotation\":%u,"
+        "\"disk_kb\":%u,\"wlock\":%u,\"rotation\":%u,\"slot1\":%u,\"slot2\":%u,"
         "\"silence_s\":%u,\"fallback_left_s\":%u,\"http\":%u,"
         "\"ingest\":{\"have\":%u,\"fresh\":%u,\"age\":%u,\"count\":%u,\"host\":\"%s\","
         "\"cpu\":%.0f,\"mem\":%.0f,\"disk\":%.0f,\"gpu_count\":%d,"
@@ -608,6 +640,7 @@ static esp_err_t state_get(httpd_req_t *req)
         pr.ports, (unsigned)(pr.checked ? 1 : 0), pr.http_ok ? 1u : 0u, pr.http_code,
         (unsigned)pr.http_ms,
         (unsigned)(disk_sectors * 512u / 1024u), wlock ? 1u : 0u, (unsigned)cfg->rotation,
+        (unsigned)cfg->slot[0], (unsigned)cfg->slot[1],
         (unsigned)sc.silence_s, (unsigned)sc.fallback_left_s, (unsigned)sc.http_hits,
         (unsigned)(im.have ? 1 : 0), (unsigned)(im.fresh ? 1 : 0), (unsigned)im.age_s,
         (unsigned)im.count, im.host,

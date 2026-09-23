@@ -11,6 +11,8 @@
 #define KEY_ROT  "rot"
 #define KEY_WLK  "wlock"
 #define KEY_PING "ping"
+#define KEY_SLOT1 "slot1"
+#define KEY_SLOT2 "slot2"
 
 static const char *TAG = "settings";
 
@@ -18,6 +20,10 @@ static settings_t s_st = {
     .rotation = 0,
     .disk_write_lock = false,
     .ping_target = "ya.ru",
+    /* Первый слот — загрузка процессора: она есть на любом ПК. Второй — вторая карта,
+       если её нет, первая (см. SLOT_GPU_LAST_PCT): так на машине с одной картой
+       вторая цифра не пустует. */
+    .slot = { SLOT_CPU_PCT, SLOT_GPU_LAST_PCT },
 };
 
 static nvs_handle_t s_nvs;
@@ -49,6 +55,16 @@ static void save_str(const char *key, const char *v)
     }
     nvs_set_str(s_nvs, key, v);
     nvs_commit(s_nvs);
+}
+
+/* Прочитать слот из NVS: мусор и значения из будущих версий приводим к умолчанию. */
+static uint8_t load_slot(const char *key, uint8_t def)
+{
+    uint8_t v = 0;
+    if (nvs_get_u8(s_nvs, key, &v) == ESP_OK && v < SLOT_KIND_MAX) {
+        return v;
+    }
+    return def;
 }
 
 void settings_init(void)
@@ -84,11 +100,13 @@ void settings_init(void)
     if (nvs_get_str(s_nvs, KEY_PING, s_st.ping_target, &len) != ESP_OK || !s_st.ping_target[0]) {
         snprintf(s_st.ping_target, sizeof(s_st.ping_target), "ya.ru");
     }
+    s_st.slot[0] = load_slot(KEY_SLOT1, s_st.slot[0]);
+    s_st.slot[1] = load_slot(KEY_SLOT2, s_st.slot[1]);
 
     display_set_rotation(s_st.rotation);
-    ESP_LOGI(TAG, "настройки: поворот %u, диск %s, цель пинга %s",
+    ESP_LOGI(TAG, "настройки: поворот %u, диск %s, цель пинга %s, экран: %s + %s",
              (unsigned)s_st.rotation, s_st.disk_write_lock ? "только чтение" : "чтение и запись",
-             s_st.ping_target);
+             s_st.ping_target, settings_slot_name(s_st.slot[0]), settings_slot_name(s_st.slot[1]));
 }
 
 const settings_t *settings_get(void)
@@ -135,4 +153,36 @@ void settings_set_ping_target(const char *name)
     snprintf(s_st.ping_target, sizeof(s_st.ping_target), "%s", name);
     save_str(KEY_PING, s_st.ping_target);
     ESP_LOGI(TAG, "цель пинга: %s", s_st.ping_target);
+}
+
+/* ------------------------------------------------------- крупные числа сводного экрана */
+
+uint8_t settings_slot(uint8_t idx)
+{
+    return idx < SETTINGS_SLOT_COUNT ? s_st.slot[idx] : SLOT_OFF;
+}
+
+void settings_set_slot(uint8_t idx, uint8_t kind)
+{
+    if (idx >= SETTINGS_SLOT_COUNT || kind >= SLOT_KIND_MAX) {
+        return;
+    }
+    s_st.slot[idx] = kind;
+    save_u8(idx == 0 ? KEY_SLOT1 : KEY_SLOT2, kind);
+    ESP_LOGI(TAG, "слот %u: %s", (unsigned)(idx + 1), settings_slot_name(kind));
+}
+
+const char *settings_slot_name(uint8_t kind)
+{
+    switch (kind) {
+    case SLOT_CPU_PCT:      return "CPU %";
+    case SLOT_RAM_PCT:      return "RAM %";
+    case SLOT_DISK_PCT:     return "DISK %";
+    case SLOT_GPU0_PCT:     return "GPU0 %";
+    case SLOT_GPU1_PCT:     return "GPU1 %";
+    case SLOT_GPU_LAST_PCT: return "GPU: вторая, иначе первая";
+    case SLOT_GPU0_TEMP:    return "GPU0 °C";
+    case SLOT_GPU1_TEMP:    return "GPU1 °C";
+    default:                return "пусто";
+    }
 }

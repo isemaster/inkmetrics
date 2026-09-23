@@ -171,12 +171,18 @@ ESP-IDF, ни драйверов. Запускать можно из любой 
 5. Прибор: страница http://192.168.7.1/api/state, поле ingest (count и age).
    count растёт каждую минуту, age - секунды.
 6. Прошивка прибора: метрики принимает только 0.5.0 и новее (сводный экран и запрос
-   /ingest). Версия показана на странице прибора и на экране SETUP прибора.
+   /ingest); два крупных числа на сводном экране выбираются на странице настроек с 0.6.0.
+   Версия показана на странице прибора и на экране SETUP прибора.
 
 Требования и ограничения
 ------------------------
 * Windows 10 или 11, права администратора на время установки.
-* Прибор подключён по USB; прошивка прибора 0.4.0 или новее.
+* Прибор подключён по USB; прошивка прибора 0.5.0 или новее (крупные числа на сводном
+  экране настраиваются с 0.6.0).
+* Загрузку видеокарты агент берёт из nvidia-smi, а если его нет - из системных счётчиков
+  "GPU Engine" (любой вендор, Windows 10 1709 и новее). Температуры карт есть только там,
+  где установлен nvidia-smi; температуры процессора агент не показывает: штатного
+  источника в Windows нет.
 * Интернета у прибора нет по устройству: это монитор. Компьютер при этом сохраняет
   свой интернет, потому что адрес на линии прибора ставится без шлюза.
 * Скрипты написаны латиницей намеренно: cmd.exe и PowerShell 5.1 при системной
@@ -321,12 +327,18 @@ No metrics - what to check, in order
 5. Device: http://192.168.7.1/api/state, the ingest block (count and age). count must
    grow every minute, age must be seconds.
 6. Device firmware: only 0.5.0 and newer accepts metrics (the summary screen and the
-   /ingest request). The version is shown on the device page and on its SETUP screen.
+   /ingest request); the two large numbers on the summary screen are configurable from
+   0.6.0 on. The version is shown on the device page and on its SETUP screen.
 
 Requirements and limitations
 ----------------------------
 * Windows 10 or 11, administrator rights during the installation.
-* The device connected over USB; device firmware 0.4.0 or newer.
+* The device connected over USB; device firmware 0.5.0 or newer (the large numbers on the
+  summary screen are configurable from 0.6.0).
+* GPU load comes from nvidia-smi, or - when it is not installed - from the Windows
+  "GPU Engine" counters (any vendor, Windows 10 1709+). GPU temperatures exist only where
+  nvidia-smi is installed; CPU temperature is not reported at all: Windows has no stock
+  source for it.
 * The device has no internet by design: it is a monitor. This PC keeps its own internet
   because the address on the device link is set without a gateway.
 * The scripts are ASCII on purpose: cmd.exe and PowerShell 5.1 mangle Russian text in

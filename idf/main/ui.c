@@ -187,6 +187,8 @@ static void ui_task(void *arg)
         st.ping_target = cfg->ping_target;
         st.rotation = cfg->rotation;
         st.disk_write_lock = cfg->disk_write_lock;
+        st.slot1 = cfg->slot[0];
+        st.slot2 = cfg->slot[1];
 
         /* авария — не «хост молчит» (это видно по надписи в рамке), а отсутствие
            своего адреса: без него прибор недоступен и в браузере тоже */

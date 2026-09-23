@@ -20,6 +20,7 @@
 #include <string.h>
 
 #include "display.h"
+#include "settings.h"      /* slot_kind_t — что показывать в двух крупных числах */
 
 #define MARGIN     1     /* крайние поля */
 #define FRAME_PAD  3     /* сколько пустого вокруг надписи в рамке */
@@ -116,32 +117,127 @@ static void uptime_text(char *out, size_t len, uint32_t up_s)
 
 /* ------------------------------------------------------- экран 0: сводный */
 
-/* Температура карты: цифры самым крупным шрифтом, «°» — средним, в верхнем углу.
-   В крупном шрифте клетка 36 px на знак, а градус съедал бы целую клетку: две
-   температуры перестали бы помещаться в 200 px. С градусом из среднего шрифта блок
-   «78°» занимает 84 px, два таких — 168 px, между числами остаётся 24 px. Внутренние
-   поля по 4 px: без них числа упирались друг в друга и читались как одно. */
-#define TEMP_PAD 4
+/* Что выведено в крупном числе сводного экрана. Выбирается на /setup (slot1, slot2):
+   на одном ПК есть температуры карт, на другом нет видеокарты вовсе, поэтому набор
+   отдан пользователю. Подпись (CPU/GPU0/…) печатается над числом из того же выбора,
+   иначе число на экране не опознать. */
+typedef struct {
+    const char *label;    /* пустая строка — слот выключен и не рисуется */
+    char        num[12];  /* «47», «100» или «--»; с запасом, чтобы формат не усекался */
+    const char *suffix;   /* «%» или «°» */
+    bool        have;     /* данные есть (когда их нет, значка тоже нет) */
+} slot_view_t;
 
-static void draw_temp(int x0, int x1, int y, int temp_c)
+#define TEMP_PAD     4   /* внутренние поля вокруг числа: без них числа слипаются */
+#define SUFFIX_DEG_W 12  /* видимая ширина «°» средним шрифтом */
+#define SUFFIX_PCT_W 16  /* «%» шире градуса */
+
+/* Подпись слота и карта, к которой он относится: -1 — слот не про видеокарту.
+   SLOT_GPU_LAST_PCT значит «вторая карта, а если она одна — первая»: так вторая цифра
+   не пустует на машине с одной картой и показывает именно вторую на двухкарточной. */
+static void slot_kind_resolve(const screen_state_t *st, uint8_t kind,
+                              const char **label, int *gpu_ix, bool *want_temp)
 {
-    char num[12];
-    bool have = temp_c >= 0;
-    if (have) {
-        snprintf(num, sizeof(num), "%d", temp_c);
-    } else {
-        snprintf(num, sizeof(num), "--");
-    }
-
-    int w_num = display_text_w(DISP_F_HUGE, num);
-    int w_deg = have ? 12 : 0;                    /* видимая ширина градуса */
-    int x = x0 + TEMP_PAD + ((x1 - x0) - 2 * TEMP_PAD - (w_num + w_deg)) / 2;
-
-    display_text_f(DISP_F_HUGE, x, y, num);
-    if (have) {
-        display_text_f(DISP_F_MID, x + w_num + 2, y + 2, "°");
+    *label = "";
+    *gpu_ix = -1;
+    *want_temp = false;
+    switch (kind) {
+    case SLOT_CPU_PCT:      *label = "CPU";  break;
+    case SLOT_RAM_PCT:      *label = "RAM";  break;
+    case SLOT_DISK_PCT:     *label = "DISK"; break;
+    case SLOT_GPU0_PCT:     *label = "GPU0"; *gpu_ix = 0; break;
+    case SLOT_GPU1_PCT:     *label = "GPU1"; *gpu_ix = 1; break;
+    case SLOT_GPU_LAST_PCT:
+        *gpu_ix = (st->gpu_count > 1) ? 1 : 0;
+        *label = (*gpu_ix == 1) ? "GPU1" : "GPU0";
+        break;
+    case SLOT_GPU0_TEMP:    *label = "GPU0"; *gpu_ix = 0; *want_temp = true; break;
+    case SLOT_GPU1_TEMP:    *label = "GPU1"; *gpu_ix = 1; *want_temp = true; break;
+    default:                break;               /* SLOT_OFF — пусто */
     }
 }
+
+static void slot_build(const screen_state_t *st, uint8_t kind, slot_view_t *v)
+{
+    const char *label = "";
+    int gpu_ix = -1;
+    bool want_temp = false;
+    slot_kind_resolve(st, kind, &label, &gpu_ix, &want_temp);
+
+    v->label = label;
+    v->suffix = want_temp ? "°" : "%";
+    v->have = false;
+
+    if (!label[0]) {
+        v->num[0] = 0;
+        return;                                   /* слот выключен */
+    }
+    /* Округление делаем сами и зажимаем диапазон: у формата не должно оставаться
+       варианта выдать больше знаков, чем ждёт раскладка (сборка IDF считает
+       предупреждения об усечении ошибками). */
+    if (gpu_ix >= 0) {
+        if (gpu_ix < st->gpu_count) {             /* карты нет или агент молчит — прочерк */
+            if (want_temp) {
+                int t = st->gpu_temp_c[gpu_ix];
+                if (t >= 0) {
+                    if (t > 999) {
+                        t = 999;
+                    }
+                    snprintf(v->num, sizeof(v->num), "%d", t);
+                    v->have = true;
+                }
+            } else if (st->gpu_pct[gpu_ix] >= 0.0f) {
+                int pc = (int)(st->gpu_pct[gpu_ix] + 0.5f);
+                if (pc > 100) {
+                    pc = 100;
+                }
+                snprintf(v->num, sizeof(v->num), "%d", pc);
+                v->have = true;
+            }
+        }
+    } else {
+        float p = (kind == SLOT_RAM_PCT) ? st->mem_pct
+                : (kind == SLOT_DISK_PCT) ? st->disk_pct : st->cpu_pct;
+        if (p >= 0.0f) {
+            int pc = (int)(p + 0.5f);
+            if (pc > 100) {
+                pc = 100;
+            }
+            snprintf(v->num, sizeof(v->num), "%d", pc);
+            v->have = true;
+        }
+    }
+    if (!v->have) {
+        snprintf(v->num, sizeof(v->num), "--");
+    }
+}
+
+/* Число в своём полуэкране. Крупным шрифтом — только два знака: «100%» это 4 клетки по
+   36 px = 144 px, два таких числа 288 px при 200 доступных. Поэтому если в строке есть
+   трёхзначное число, оба рисуются средним шрифтом и по вертикали встают в тот же блок
+   (высота блока не меняется — раскладка не прыгает при 100 %). */
+static void draw_slot(int x0, int x1, int y, int h_huge, int h_mid,
+                      const slot_view_t *v, bool huge)
+{
+    if (!v->label[0]) {
+        return;
+    }
+    if (huge) {
+        int w_num = display_text_w(DISP_F_HUGE, v->num);
+        int w_suf = v->have ? (v->suffix[0] == '%' ? SUFFIX_PCT_W : SUFFIX_DEG_W) : 0;
+        int x = x0 + TEMP_PAD + ((x1 - x0) - 2 * TEMP_PAD - (w_num + w_suf)) / 2;
+        display_text_f(DISP_F_HUGE, x, y, v->num);
+        if (v->have) {
+            display_text_f(DISP_F_MID, x + w_num + 2, y + 2, v->suffix);
+        }
+    } else {
+        char all[16];
+        snprintf(all, sizeof(all), "%s%s", v->num, v->have ? v->suffix : "");
+        int w = display_text_w(DISP_F_MID, all);
+        display_text_f(DISP_F_MID, x0 + ((x1 - x0) - w) / 2, y + (h_huge - h_mid) / 2, all);
+    }
+}
+
 
 static void show_summary(const screen_state_t *st)
 {
@@ -167,30 +263,55 @@ static void show_summary(const screen_state_t *st)
     frame_title(status, y, h_frame);
     y += h_frame + gap;
 
-    /* 2. подписи карт и 3. их температуры — самое крупное на экране */
-    display_text_center_x(DISP_F_SMALL, 0, DISP_W / 2, y, "GPU0");
-    display_text_center_x(DISP_F_SMALL, DISP_W / 2, DISP_W, y, "GPU1");
+    /* 2. подписи крупных чисел и 3. сами числа — самое крупное на экране.
+       Что показывать, выбрано на /setup (slot1, slot2); по умолчанию CPU % и вторая
+       карта, а на машине с одной картой — первая (SLOT_GPU_LAST_PCT). */
+    slot_view_t sv[2];
+    slot_build(st, st->slot1, &sv[0]);
+    slot_build(st, st->slot2, &sv[1]);
+    const bool sv_huge = strlen(sv[0].num) <= 2 && strlen(sv[1].num) <= 2;
+
+    for (int i = 0; i < 2; i++) {
+        if (sv[i].label[0]) {
+            display_text_center_x(DISP_F_SMALL, i * DISP_W / 2, (i + 1) * DISP_W / 2,
+                                  y, sv[i].label);
+        }
+    }
     y += h_small + gap;
 
-    draw_temp(0, DISP_W / 2, y, st->gpu_count > 0 ? st->gpu_temp_c[0] : -1);
-    draw_temp(DISP_W / 2, DISP_W, y, st->gpu_count > 1 ? st->gpu_temp_c[1] : -1);
+    draw_slot(0, DISP_W / 2, y, h_huge, h_mid, &sv[0], sv_huge);
+    draw_slot(DISP_W / 2, DISP_W, y, h_huge, h_mid, &sv[1], sv_huge);
     y += h_huge + gap;
 
-    /* 4. разделитель: выше — температуры, ниже — загрузки */
+    /* 4. разделитель: выше — крупные числа, ниже — загрузки */
     rule(y);
     y += 1 + gap;
 
-    /* 5. подписи и 6. проценты CPU/RAM/DISK по трём колонкам */
+    /* 5. подписи и 6. проценты CPU/RAM/DISK по трём колонкам. Три знака («100%») в
+       среднем шрифте — 72 px при колонке 66,7 px, поэтому два соседних трёхзначных
+       числа слиплись бы на 5 px. Если такое есть, вся строка идёт крупным шрифтом
+       (48 px на число) и по вертикали встаёт на то же место. */
     {
         static const char *labels[3] = { "CPU", "RAM", "DISK" };
         const float vals[3] = { st->cpu_pct, st->mem_pct, st->disk_pct };
+        char txt[3][8];
+        bool wide = false;
+        for (int i = 0; i < 3; i++) {
+            pct_text(txt[i], sizeof(txt[i]), vals[i]);
+            if (strlen(txt[i]) > 3) {
+                wide = true;
+            }
+        }
         for (int i = 0; i < 3; i++) {
             int x0 = i * DISP_W / 3;
             int x1 = (i + 1) * DISP_W / 3;
             display_text_center_x(DISP_F_SMALL, x0, x1, y, labels[i]);
-            char val[8];
-            pct_text(val, sizeof(val), vals[i]);
-            display_text_center_x(DISP_F_MID, x0, x1, y + h_small + gap, val);
+            if (wide) {
+                display_text_center_x(DISP_F_BIG, x0, x1,
+                                      y + h_small + gap + (h_mid - h_big) / 2, txt[i]);
+            } else {
+                display_text_center_x(DISP_F_MID, x0, x1, y + h_small + gap, txt[i]);
+            }
         }
     }
     y += h_small + gap + h_mid + gap;
@@ -243,7 +364,7 @@ static void show_setup(const screen_state_t *st)
     const int h_small = display_text_h(DISP_F_SMALL);
     const int h_big   = display_text_h(DISP_F_BIG);
 
-    const int heights[] = { h_frame, h_big, h_big, h_big, h_big, 1, h_small, h_small, h_small };
+    const int heights[] = { h_frame, h_big, h_big, h_big, h_big, h_big, 1, h_small, h_small, h_small };
     const int n = (int)(sizeof(heights) / sizeof(heights[0]));
     const int gap = gap_for(sum_heights(heights, n), n);
 
@@ -255,6 +376,28 @@ static void show_setup(const screen_state_t *st)
     char buf[28];
     setup_row("WEB", st->dev_ip ? st->dev_ip : "-", y, h_big, h_small);
     y += h_big + gap;
+
+    /* Что стоит в двух крупных числах сводного экрана — подписи те же, что на нём
+       сами (для SLOT_GPU_LAST_PCT это GPU1 на двухкарточной машине и GPU0 на одно-). */
+    {
+        char show[20];
+        const char *l1 = "", *l2 = "";
+        int ix = -1;
+        bool t = false;
+        slot_kind_resolve(st, st->slot1, &l1, &ix, &t);
+        slot_kind_resolve(st, st->slot2, &l2, &ix, &t);
+        (void)ix;
+        (void)t;
+        if (l1[0] && l2[0]) {
+            snprintf(show, sizeof(show), "%s %s", l1, l2);
+        } else if (l1[0] || l2[0]) {
+            snprintf(show, sizeof(show), "%s", l1[0] ? l1 : l2);
+        } else {
+            snprintf(show, sizeof(show), "-");
+        }
+        setup_row("SHOW", show, y, h_big, h_small);
+        y += h_big + gap;
+    }
 
     snprintf(buf, sizeof(buf), "%u", (unsigned)st->rotation);
     setup_row("ROTATE", buf, y, h_big, h_small);
