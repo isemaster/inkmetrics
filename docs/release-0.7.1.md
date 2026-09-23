@@ -42,7 +42,7 @@ sha256 обоих образов, находит прибор по VID/PID, от
 | `inkmetrics-fw-0x0.bin` (объединённый образ) | 773 216 Б | `c8c0bfe95e8723d8c62407ab51ed2dc276e6601746befab5ccb29ccedaa86971` |
 | `setup-disk-big.img` (образ диска) | 3 866 624 Б | `903c2507b00b6ddca694f8670156a0754796411bf26725471280be46537ce71d` |
 | `inkmetrics-webflash-2026-09-23.zip` | 692 415 Б | `2d8546e55359d7de8e9519275ea60130…` |
-| `flash-kit-inkmetrics-2026-09-23.zip` | 825 523 Б | `79e6d2f78f22d331d270b2a7ad5ba5e3…` |
+| `flash-kit-inkmetrics-2026-09-23.zip` | 825 659 Б | `9ebbc8b7aa75dafc3812a1a8d5a52831…` |
 
 Суммы всех файлов комплекта — в `flash-kit/idf/SHA256SUMS.txt` (19 строк, все сверены с файлами).
 
