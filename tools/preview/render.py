@@ -21,7 +21,7 @@ except ImportError:
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
-OUT_PNG = ROOT / "docs" / "screens-v6.png"
+OUT_PNG = ROOT / "docs" / "screens-v7.png"   # макет текущей ревизии экранов
 W = H = 200
 SCALE = 3
 
