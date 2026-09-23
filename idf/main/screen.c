@@ -81,14 +81,15 @@ static int sum_heights(const int *h, int n)
     return s;
 }
 
-/* Надпись в рамке во всю ширину — верхний блок обоих экранов. */
-static void frame_title(const char *text, int y, int h)
+/* Заголовок экрана SETUP — верхний блок. Рамки вокруг него нет (просьба пользователя
+   23.09; вокруг строки состояния сводного экрана её убрали тем же днём), поэтому блок
+   остался той же высоты, а слово просто стоит по центру: раскладка SETUP не поехала. */
+static void title_line(const char *text, int y, int h)
 {
     char buf[32];
     snprintf(buf, sizeof(buf), "%s", text);
     upper_utf8(buf);
-    display_rect(0, y, DISP_W, h, false, true);
-    display_text_center(DISP_F_BIG, y + FRAME_PAD, buf);
+    display_text_center(DISP_F_BIG, y + (h - display_text_h(DISP_F_BIG)) / 2, buf);
 }
 
 /* Строка состояния хоста — верхний блок сводного экрана. Рамки вокруг неё нет
@@ -439,7 +440,7 @@ static void show_setup(const screen_state_t *st)
 
     int y = 0;
 
-    frame_title("SETUP", y, h_frame);
+    title_line("SETUP", y, h_frame);
     y += h_frame + gap;
 
     char buf[28];
