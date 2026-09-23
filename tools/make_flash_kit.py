@@ -77,11 +77,12 @@ if errorlevel 1 (
 )
 
 echo Flashing inkmetrics to %~1 ...
-rem --after no_reset keeps the board in the bootloader after writing: the port stays the
-rem same one and the download flag is cleared below BEFORE the board leaves the bootloader
-rem (otherwise the command below races with the USB re-enumeration and fails, leaving a
-rem freshly flashed board sitting in the bootloader).
-%PY% -m esptool --chip esp32s3 --port %~1 --baud 921600 --after no_reset write_flash -z ^
+rem --before/--after no_reset: never touch DTR/RTS. On this board (ESP32-S3 USB-Serial/JTAG)
+rem toggling those lines wedges the CDC port until USB is replugged; the ROM loader answers
+rem fine without them as long as the board is already in bootloader mode (hold BOOT, plug USB).
+rem Writing keeps the board in the bootloader, and the download flag is cleared below BEFORE
+rem it leaves (otherwise the next command races the USB re-enumeration).
+%PY% -m esptool --chip esp32s3 --port %~1 --baud 921600 --before no_reset --after no_reset write_flash -z ^
   0x0      "%~dp0bootloader.bin" ^
   0x8000   "%~dp0partition-table.bin" ^
   0xe000   "%~dp0ota_data_initial.bin" ^
@@ -89,7 +90,8 @@ rem freshly flashed board sitting in the bootloader).
   __MSC__ "%~dp0__DISK__"
 if errorlevel 1 (
   echo.
-  echo FAILED. Check the port and that the board is in bootloader mode ^(hold BOOT, plug USB^).
+  echo FAILED. Is the board in bootloader mode? Hold BOOT, plug USB, then run this file again.
+  echo If the port cannot be opened at all: unplug the USB cable and plug it back in.
   pause
   exit /b 1
 )

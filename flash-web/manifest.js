@@ -2,7 +2,7 @@
 export const MANIFEST = {
   "device": "inkmetrics",
   "fw": "0.7.0-idf",
-  "built": "2026-09-23 16:17",
+  "built": "2026-09-23 16:56",
   "files": [
     {
       "name": "inkmetrics-fw-0x0.bin",
