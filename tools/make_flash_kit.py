@@ -97,7 +97,7 @@ if errorlevel 1 (
 rem Clear the sticky RTC bit (a previous /api/boot or self-check fallback sets it) and reset
 rem into the application, so USB does not have to be replugged and the board actually starts.
 %PY% -m esptool --chip esp32s3 --port %~1 --before no_reset --after watchdog_reset ^
-  write_mem 0x6000812C 0x00
+  write_mem 0x6000812C 0x00 0x1
 if errorlevel 1 (
   echo.
   echo WARNING: could not clear the download flag. If the board does not start, unplug USB

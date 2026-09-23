@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>inkmetrics — прошивка прибора из браузера</title>
+<style>
+  :root { --fg:#1b1b1b; --dim:#6b6b6b; --line:#d8d8d8; --ok:#0a7d32; --bad:#b3261e; --accent:#1f4fd8; }
+  * { box-sizing:border-box; }
+  body { margin:0; padding:28px 20px 60px; font:15px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;
+         color:var(--fg); background:#fbfbfa; }
+  main { max-width:840px; margin:0 auto; }
+  h1 { font-size:24px; margin:0 0 6px; }
+  .sub { color:var(--dim); margin:0 0 22px; }
+  .card { background:#fff; border:1px solid var(--line); border-radius:10px; padding:18px 20px; margin:0 0 16px; }
+  ol.steps { margin:0; padding-left:22px; }
+  ol.steps li { margin:0 0 8px; }
+  b { font-weight:600; }
+  .row { display:flex; flex-wrap:wrap; gap:10px; margin:4px 0 0; }
+  button { font:inherit; padding:10px 16px; border-radius:8px; border:1px solid var(--line);
+           background:#fff; cursor:pointer; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; font-weight:600; }
+  button:disabled { opacity:.45; cursor:default; }
+  .status { font-weight:600; margin:14px 0 0; }
+  .status.ok { color:var(--ok); }
+  .status.bad { color:var(--bad); }
+  table { width:100%; border-collapse:collapse; font-size:14px; }
+  th, td { text-align:left; padding:7px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--dim); font-weight:500; }
+  code { font:13px/1.4 ui-monospace,Consolas,monospace; }
+  #log { margin:0; padding:14px 16px; background:#101216; color:#d8e0ea; border-radius:8px;
+         height:230px; overflow:auto; font:12.5px/1.55 ui-monospace,Consolas,monospace; white-space:pre-wrap; }
+  .hint { color:var(--dim); font-size:13.5px; margin:10px 0 0; }
+  .bar { height:8px; background:#e8e8e8; border-radius:5px; overflow:hidden; margin:10px 0 0; }
+  .bar > i { display:block; height:100%; width:0; background:var(--accent); transition:width .15s; }
+  .warn { border-left:3px solid var(--bad); padding-left:12px; color:var(--bad); }
+  .done { display:none; }
+</style>
+</head>
+<body>
+<main>
+  <h1>inkmetrics — прошивка прибора из браузера</h1>
+  <p class="sub">Ничего устанавливать не нужно: только Chrome или Edge и USB-кабель.</p>
+
+  <div class="card">
+    <ol class="steps">
+      <li>Прибор в <b>режим загрузчика</b>: зажать кнопку <b>BOOT</b>, не отпуская подключить USB,
+          подержать ~2 секунды, отпустить.</li>
+      <li><b>Проверить файлы</b> и <b>подключить прибор</b> — браузер покажет список портов, у прибора
+          он обычно <code>COM5</code> и выше.</li>
+      <li>Нажать <b>Прошить</b> и дождаться «Готово».</li>
+    </ol>
+    <div class="hint" id="boot-hint">Порт появляется <b>только</b> в режиме загрузчика: в рабочем
+      режиме у прибора COM-порта нет — он отдаёт сетевую карту и диск.</div>
+  </div>
+
+  <div class="card">
+    <div class="row">
+      <button id="btn-check" class="primary">1. Проверить файлы</button>
+      <button id="btn-connect" disabled>2. Подключить прибор</button>
+      <button id="btn-flash" disabled>3. Прошить</button>
+    </div>
+    <div class="status" id="status">Ожидание.</div>
+    <div class="bar"><i id="bar"></i></div>
+    <div class="hint" id="chip"></div>
+  </div>
+
+  <div class="card">
+    <table id="files">
+      <thead><tr><th>Файл</th><th>Размер</th><th>Адрес</th><th>sha256</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <div class="hint">Суммы файлов сверяются в браузере до записи — если строки красные, файлы
+      повреждены, прошивать не надо.</div>
+  </div>
+
+  <div class="card">
+    <pre id="log"></pre>
+  </div>
+
+  <div class="card done" id="done">
+    <b>Готово: прошивка записана.</b>
+    <p style="margin:8px 0 0">Прибор запускается сам: на экране — сводный экран метрик, в Проводнике
+      появится диск <code>INKMETRICS</code> (3,69 МБ) и сетевая карта <code>192.168.7.1</code>.
+      На диске запустите <code>instagent.cmd</code> <b>от имени администратора</b> — он поставит
+      агента и задачу «inkmetrics agent».</p>
+    <p class="hint" style="margin:10px 0 0">Если прибор не поднялся (пустой экран, нет диска и сети) —
+      отключите и подключите USB: он стартует в обычном режиме.</p>
+  </div>
+</main>
+
+<script type="module">
+/* Страница понимает два режима:
+   — рядом лежат файлы (flash-web/ в репозитории или на GitHub Pages): образы берутся из
+     ./ или из ../flash-kit/idf/;
+   — один файл со вшитыми образами (window.INKMETRICS_EMBEDDED) — работает из папки без сервера. */
+const EMB = window.INKMETRICS_EMBEDDED || null;
+
+const el = (id) => document.getElementById(id);
+const statusEl = el("status"), logEl = el("log"), barEl = el("bar"), chipEl = el("chip");
+const btnCheck = el("btn-check"), btnConnect = el("btn-connect"), btnFlash = el("btn-flash");
+const tbody = el("files").querySelector("tbody");
+
+let transport = null, loader = null, connected = false, filesReady = false;
+
+function log(line) {
+  logEl.textContent += line + "\n";
+  logEl.scrollTop = logEl.scrollHeight;
+}
+function setStatus(text, kind) {
+  statusEl.textContent = text;
+  statusEl.className = "status" + (kind ? " " + kind : "");
+}
+function progress(p) { barEl.style.width = Math.max(0, Math.min(100, p)) + "%"; }
+
+/* esptool-js печатает частями: собираем строки, иначе журнал превращается в кашу. */
+let tbuf = "";
+const term = {
+  clean() { tbuf = ""; },
+  write(s) {
+    tbuf += s;
+    if (tbuf.indexOf("\n") >= 0) {
+      const parts = tbuf.split("\n");
+      tbuf = parts.pop();
+      for (const p of parts) if (p.trim()) log("    " + p.trim());
+    }
+  },
+  writeLine(s) { this.write(s + "\n"); },
+};
+
+function b64ToBytes(b64) {
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+async function sha256hex(bytes) {
+  if (!(window.crypto && crypto.subtle && crypto.subtle.digest)) return null;
+  try {
+    const h = await crypto.subtle.digest("SHA-256", bytes);
+    return [...new Uint8Array(h)].map((b) => b.toString(16).padStart(2, "0")).join("");
+  } catch (e) { return null; }
+}
+function human(size) {
+  return size < 1048576 ? (size / 1024).toFixed(0) + " КБ" : (size / 1048576).toFixed(2) + " МБ";
+}
+
+async function loadBytes(name) {
+  if (EMB) return { bytes: b64ToBytes(EMB.files[name]), where: "вшито в страницу" };
+  for (const base of ["./", "../flash-kit/idf/"]) {
+    try {
+      const r = await fetch(base + name, { cache: "no-store" });
+      if (r.ok) return { bytes: new Uint8Array(await r.arrayBuffer()), where: base + name };
+    } catch (e) { /* пробуем следующее место */ }
+  }
+  throw new Error("не смог прочитать файл " + name + " — положите его рядом со страницей");
+}
+
+async function init() {
+  logEl.textContent = "";
+  if (!("serial" in navigator)) {
+    setStatus("В этом браузере нет Web Serial. Откройте страницу в Chrome или Edge (89+).", "bad");
+    log("Web Serial API недоступен: нужен Chrome или Edge.");
+    return;
+  }
+  const MANIFEST = EMB ? EMB.manifest : (await import("./manifest.js")).MANIFEST;
+  window.__MANIFEST = MANIFEST;
+  log(`inkmetrics: прошивка ${MANIFEST.fw}, собрано ${MANIFEST.built}`);
+  log(`файлов к записи: ${MANIFEST.files.length}`);
+
+  for (const f of MANIFEST.files) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td><code>${f.name}</code><div class="hint">${f.label}</div></td>` +
+      `<td>${human(f.size)}</td><td><code>0x${f.address.toString(16)}</code></td>` +
+      `<td><code class="sha">…</code></td><td class="mark">…</td>`;
+    tbody.appendChild(tr);
+    f.tr = tr;
+  }
+}
+
+async function checkFiles() {
+  const MANIFEST = window.__MANIFEST;
+  btnCheck.disabled = true;
+  setStatus("Читаю файлы и сверяю суммы…");
+  filesReady = true;
+  try {
+    for (const f of MANIFEST.files) {
+      const got = await loadBytes(f.name);
+      if (got.bytes.length !== f.size) throw new Error(`${f.name}: размер ${got.bytes.length} вместо ${f.size}`);
+      f.bytes = got.bytes;
+      const sha = await sha256hex(got.bytes);
+      const ok = sha === null ? null : sha === f.sha256;
+      if (ok === false) filesReady = false;
+      f.tr.querySelector(".sha").textContent = (sha || f.sha256).slice(0, 16) + "…";
+      const mark = f.tr.querySelector(".mark");
+      mark.textContent = ok === null ? "не сверить" : ok ? "совпадает" : "НЕ СОВПАДАЕТ";
+      mark.style.color = ok === false ? "var(--bad)" : ok ? "var(--ok)" : "";
+      log(`${f.name}: ${human(f.bytes.length)} (${got.where}) — ` +
+          (ok === null ? "браузер не дал посчитать sha256" : ok ? "sha256 совпадает" : "sha256 НЕ совпадает"));
+    }
+    if (filesReady) {
+      setStatus("Файлы на месте и совпадают по суммам. Подключайте прибор.", "ok");
+      btnConnect.disabled = false;
+      btnCheck.textContent = "Проверить ещё раз";
+    } else {
+      setStatus("Файлы повреждены — прошивать нельзя.", "bad");
+    }
+  } catch (e) {
+    setStatus("Файлы не прочитаны: " + e.message, "bad");
+    log("ОШИБКА: " + e.message);
+  } finally {
+    btnCheck.disabled = false;
+  }
+}
+
+async function closeTransport() {
+  if (!transport) return;
+  const t = transport;
+  transport = null; loader = null; connected = false;
+  try { await t.disconnect(); } catch (e) { /* порт мог уже закрыться */ }
+}
+
+async function connect() {
+  btnConnect.disabled = true;
+  try {
+    /* Порт мог остаться открытым от прошлой попытки — тогда браузер отвечает
+       «Failed to open serial port». Закрываем, прежде чем открывать снова. */
+    await closeTransport();
+    setStatus("Ищу прибор…");
+    let port = null;
+    const granted = await navigator.serial.getPorts();
+    port = granted.find((p) => { const i = p.getInfo(); return i.usbVendorId === 0x303a; }) || null;
+    if (port) log("порт прибора уже разрешён этому сайту, беру его");
+    else {
+      log("открываю список портов — выберите «USB JTAG/serial debug unit» или COM5+");
+      port = await navigator.serial.requestPort({ filters: [{ usbVendorId: 0x303a }] });
+    }
+    const info = port.getInfo();
+    log(`порт: VID 0x${(info.usbVendorId || 0).toString(16)} PID 0x${(info.usbProductId || 0).toString(16)}`);
+
+    const libUrl = EMB ? "data:text/javascript;base64," + EMB.lib : "./esptool-js.bundle.js";
+    const { ESPLoader, Transport } = await import(libUrl);
+    transport = new Transport(port, true);
+    loader = new ESPLoader({ transport, baudrate: 921600, terminal: term });
+
+    setStatus("Соединяюсь с загрузчиком…");
+    /* "no_reset": прибор уже в режиме загрузчика (его перевели кнопкой BOOT), а сброс через
+       DTR/RTS браузер на связке Windows + USB-JTAG выполнить не может
+       («Failed to set control signals»). Синхронизируемся без сброса — ровно как
+       `esptool --before no_reset`. */
+    const chip = await loader.main("no_reset");
+    let mac = "";
+    try { mac = await loader.chip.readMac(loader); } catch (e) { /* не критично */ }
+    chipEl.textContent = `чип: ${chip}` + (mac ? `, MAC ${mac}` : "");
+    log(`загрузчик отвечает: ${chip}${mac ? ", MAC " + mac : ""}`);
+    connected = true;
+    setStatus("Прибор на связи. Можно прошивать.", "ok");
+    btnFlash.disabled = false;
+  } catch (e) {
+    await closeTransport();
+    setStatus("Не подключился: " + (e && e.message ? e.message : e), "bad");
+    log("ОШИБКА: " + (e && e.message ? e.message : e));
+    log("Проверьте: прибор в режиме загрузчика (BOOT + USB), кабель напрямую без хаба, порт свободен.");
+    log("Можно нажать «Подключить прибор» ещё раз.");
+    btnConnect.disabled = false;
+  }
+}
+
+async function flash() {
+  const MANIFEST = window.__MANIFEST;
+  btnFlash.disabled = true;
+  btnConnect.disabled = true;
+  progress(0);
+  try {
+    setStatus("Записываю прошивку…");
+    let lastPct = -1;
+    await loader.writeFlash({
+      fileArray: MANIFEST.files.map((f) => ({ data: f.bytes, address: f.address })),
+      flashSize: "keep", flashMode: "keep", flashFreq: "keep",
+      eraseAll: false, compress: true,
+      reportProgress: (idx, written, total) => {
+        const pct = Math.round((100 * written) / total);
+        if (pct !== lastPct) {
+          lastPct = pct;
+          progress(pct);
+          setStatus(`Записываю: ${MANIFEST.files[idx].label} — ${pct}%`);
+        }
+      },
+    });
+    log("прошивка и диск записаны");
+
+    /* Сброс после записи — сторожевым таймером (как «Hard resetting with a watchdog» у esptool):
+       линии DTR/RTS в браузере недоступны. Сначала снимаем флаг «грузиться в загрузчик», иначе
+       чип после перезагрузки вернётся в загрузчик вместо приложения. Регистры — те же, что
+       использует esptool для ESP32-S3. */
+    try {
+      await loader.writeReg(0x6000812c, 0, 0x1, 0);              // RTC_CNTL_OPTION1: снять FORCE_DOWNLOAD_BOOT
+      log("флаг загрузчика снят");
+      await loader.writeReg(0x600080b0, 0x50d83aa1, 0xffffffff, 0);   // WDTWPROTECT: разблокировать
+      await loader.writeReg(0x6000809c, 2000, 0xffffffff, 0);         // WDTCONFIG1: таймаут
+      await loader.writeReg(0x60008098, 0xd0000102, 0xffffffff, 0);   // WDTCONFIG0: (1<<31)|(5<<28)|(1<<8)|2
+      await loader.writeReg(0x600080b0, 0, 0xffffffff, 0);            // WDTWPROTECT: заблокировать
+      log("перезагружаю прибор в рабочем режиме");
+      await new Promise((r) => setTimeout(r, 1500));
+    } catch (e) {
+      log("предупреждение: не удалось сбросить прибор (" + e.message + ")");
+      log("если он не запустится — отключите и подключите USB");
+    }
+    await closeTransport();
+
+    progress(100);
+    setStatus("Готово: прошивка записана.", "ok");
+    el("done").style.display = "block";
+    if (location.protocol === "http:") {
+      try {
+        await fetch("http://192.168.7.1/", { mode: "no-cors", cache: "no-store" });
+        log("прибор отвечает по сети — всё поднялось");
+      } catch (e) {
+        log("проверить прибор по сети не удалось (" + e.message + ") — посмотрите на экран прибора");
+      }
+    }
+  } catch (e) {
+    setStatus("Ошибка записи: " + (e && e.message ? e.message : e), "bad");
+    log("ОШИБКА: " + (e && e.message ? e.message : e));
+    log("Отключите и подключите USB прибора, зажмите BOOT и попробуйте снова.");
+    btnConnect.disabled = false;
+    btnCheck.disabled = false;
+  }
+}
+
+btnCheck.addEventListener("click", checkFiles);
+btnConnect.addEventListener("click", connect);
+btnFlash.addEventListener("click", flash);
+init().catch((e) => { setStatus("Страница не запустилась: " + e.message, "bad"); log("ОШИБКА: " + e.message); });
+</script>
+</body>
+</html>

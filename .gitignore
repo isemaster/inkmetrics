@@ -51,3 +51,7 @@ TZ-SENTINEL-*.md
 # локальные превью кадров
 host/*.png
 host/config.json.bak
+
+# веб-прошивальщик: страница в репозитории, а образы для архива — генерируются
+inkmetrics-webflash.html
+inkmetrics-webflash-*.zip

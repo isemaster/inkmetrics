@@ -105,7 +105,7 @@ def reset_to_app(port: str) -> None:
     """
     cmd = [sys.executable, "-m", "esptool", "--chip", "esp32s3", "--port", port,
            "--before", "no-reset", "--after", "watchdog-reset",
-           "write-mem", hex(RTC_CNTL_OPTION1_REG), "0x00"]
+           "write-mem", hex(RTC_CNTL_OPTION1_REG), "0x00", "0x1"]
     res = subprocess.run(cmd, capture_output=True, text=True)
     out = ((res.stdout or "") + (res.stderr or "")).strip()
     if res.returncode == 0:
