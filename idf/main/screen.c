@@ -25,6 +25,8 @@
 #define MARGIN     1     /* крайние поля */
 #define FRAME_PAD  3     /* сколько пустого вокруг надписи в рамке (экран SETUP) */
 #define STATUS_PAD 2     /* то же для строки состояния сводного экрана: рамки нет */
+#define STATUS_TOP 5     /* отступ строки состояния от верхнего края (просьба 23.09):
+                            без него слово липло к краю панели */
 #define GAP_MIN    3     /* меньше этого промежутки не делаем: блоки слипнутся */
 
 /* ------------------------------------------------------------------ утилиты */
@@ -323,7 +325,7 @@ static void show_summary(const screen_state_t *st)
     } else {
         snprintf(word, sizeof(word), "NO DATA");
     }
-    status_line(word, detail, y);
+    status_line(word, detail, y + STATUS_TOP);   /* на 5 px ниже верхнего края */
     y += h_stat + gap;
 
     /* мелкие подписи CPU/GPU — на строку ниже состояния (просьба пользователя 23.09):
