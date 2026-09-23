@@ -82,31 +82,45 @@ bool timesync_source(char *dst, int len)
     return s_valid;
 }
 
-static void fmt(char *dst, int len, const char *fmt_str)
+/* Локальное время прибора с учётом сдвига хоста. Время собираем в struct tm один раз,
+   а форматируем уже каждый своей строкой: общий форматтер с одним списком аргументов
+   (%02d,%02d,%02d,%02d,%02d,%04d) не мог отдать дате день и год — дата печатала
+   «час.минута.секунда» (23.09 на странице было «14.09.0032»). */
+static bool now_local(struct tm *out)
 {
-    if (!dst || len <= 0) {
-        return;
-    }
     if (!s_valid) {
-        snprintf(dst, len, "--");
-        return;
+        return false;
     }
     time_t now = time(NULL);
     time_t local = now + (time_t)s_tz_min * 60;
-    struct tm tm;
-    gmtime_r(&local, &tm);
-    snprintf(dst, len, fmt_str, tm.tm_hour, tm.tm_min, tm.tm_sec, tm.tm_mday, tm.tm_mon + 1,
-             tm.tm_year + 1900);
+    gmtime_r(&local, out);
+    return true;
 }
 
 void timesync_time_str(char *dst, int len)
 {
-    fmt(dst, len, "%02d:%02d:%02d");
+    struct tm tm;
+    if (!dst || len <= 0) {
+        return;
+    }
+    if (!now_local(&tm)) {
+        snprintf(dst, len, "--");
+        return;
+    }
+    snprintf(dst, len, "%02d:%02d:%02d", tm.tm_hour, tm.tm_min, tm.tm_sec);
 }
 
 void timesync_date_str(char *dst, int len)
 {
-    fmt(dst, len, "%02d.%02d.%04d");
+    struct tm tm;
+    if (!dst || len <= 0) {
+        return;
+    }
+    if (!now_local(&tm)) {
+        snprintf(dst, len, "--");
+        return;
+    }
+    snprintf(dst, len, "%02d.%02d.%04d", tm.tm_mday, tm.tm_mon + 1, tm.tm_year + 1900);
 }
 
 static void timesync_task(void *arg)
