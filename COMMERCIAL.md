@@ -31,7 +31,7 @@
 
 ## Как написать
 
-Почта: **isemaster@gmail.com**. В письме достаточно сказать, что за прибор, сколько планируется
+Почта: **isemaster+inkmetrics@gmail.com**. В письме достаточно сказать, что за прибор, сколько планируется
 выпустить, какая страна и как удобно платить.
 
 ## Commercial use (English, short)
@@ -39,5 +39,5 @@
 This project is released under the PolyForm Noncommercial License 1.0.0 (see `LICENSE`). Personal and
 noncommercial use is free. Selling devices with this firmware, selling the firmware itself, or using it in
 any paid product or service requires a separate written commercial license; the fee (per unit, percentage
-of the sale price, or one-time) is negotiated case by case. Write to **isemaster@gmail.com** with your
+of the sale price, or one-time) is negotiated case by case. Write to **isemaster+inkmetrics@gmail.com** with your
 product, expected volume and country.
