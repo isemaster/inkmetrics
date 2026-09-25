@@ -241,6 +241,25 @@ both power and data. Pinout and addressing: `docs/pins.md`, `docs/addressing.md`
 * `docs/notify-plan.md` — draft: showing arbitrary text sent by smart-home devices;
 * `idf/README.md` — build, diagnostics, panic decoding, working with the "black box" log.
 
+## What to buy (ready-made)
+
+There is nothing to assemble: the board with the panel is sold ready-made — Waveshare
+**ESP32-S3-ePaper-1.54** (the `-EN` variant, SKU 32299) in a white case, with the display, buttons, an
+SHTC3 sensor and a USB socket. The device is that very board plus our firmware; nothing else is needed
+beyond a USB cable and a computer.
+
+<img src="media/board-and-panel.jpg" alt="Waveshare ESP32-S3-ePaper-1.54 board: case, pinout legend and display" width="560">
+
+The legend printed on the board lists everything it carries: an ESP32-S3-PICO-1-N8R8, the 200×200
+e-Paper panel, an RTC PCF85063, an ES8311 audio codec, a microphone, the SHTC3, USB and three buttons.
+The firmware uses the panel, the buttons, the SHTC3 and USB.
+
+<img src="media/kit-box.jpg" alt="What arrives in the box: ESP32-S3-ePaper-1.54-EN packaging, the panel in bags, and the device running our firmware" width="620">
+
+This is what the parcel looks like: the `ESP32-S3-ePaper-1.54-EN` box, the panel in foam-lined bags — and
+the device on a desk, already running our firmware. Only the hardware has to be bought: the firmware and
+the agent are free for personal use (see "Licence").
+
 ## Licence
 
 The project's code is released under the **PolyForm Noncommercial License 1.0.0** — full text in the
